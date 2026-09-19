@@ -26,6 +26,7 @@ public class ClientProxy extends CommonProxy {
         MinecraftForge.EVENT_BUS.register(this);
         MinecraftForge.EVENT_BUS.register(ClientMeshes.INSTANCE);
         MinecraftForge.EVENT_BUS.register(MeshPicking.INSTANCE);
+        MinecraftForge.EVENT_BUS.register(AnchorBreak.INSTANCE);
     }
 
     @SubscribeEvent

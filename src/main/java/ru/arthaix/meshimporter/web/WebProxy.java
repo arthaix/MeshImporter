@@ -50,6 +50,7 @@ public final class WebProxy {
         TriangleGrid grid = new TriangleGrid(tris, model.triangleCount, 0, 0, 0);
         double s = Math.max(0.25, cell);
         WebMesh best = null, last = null;
+        double tooFine = 0;
         // the asked grid, made coarser only while the copy does not fit under the ceiling
         for (int attempt = 0; attempt < 6; attempt++) {
             WebMesh m = attempt(local, model, splitFaces, b, s, grid, triMat);
@@ -58,10 +59,24 @@ public final class WebProxy {
                 best = m;
                 break;
             }
+            tooFine = s;
             double ratio = m == null ? 4 : (double) m.triangleCount() / Math.max(1, budget);
             s *= Math.max(1.15, Math.sqrt(ratio) * 1.05);
         }
         if (best == null) return last;
+        // that step jumps over the good grids: a model of several square kilometres went from 2.5 blocks straight to
+        // 5.3 and lost its embankments. Come back down to the finest grid that still fits under the ceiling.
+        for (int attempt = 0; attempt < 4 && tooFine > 0 && s / tooFine > 1.08; attempt++) {
+            double mid = Math.sqrt(s * tooFine);
+            WebMesh m = attempt(local, model, splitFaces, b, mid, grid, triMat);
+            if (m != null && m.triangleCount() <= budget) {
+                best = m;
+                s = mid;
+            } else {
+                tooFine = mid;
+            }
+        }
+        if (tooFine > 0) return best;
         // a small model has room to spare: make the grid finer while the copy stays cheap. The ceiling itself is for
         // models that need the asked grid to keep their shape, not for spending it on a compact one.
         int cheap = Math.max(1000, budget / 4);
@@ -206,7 +221,7 @@ public final class WebProxy {
                     }
         }
 
-        smooth(pos, vcell, nv, quads, nq, ox, oy, oz, s);
+        if (!"false".equals(System.getProperty("meshimporter.web.smooth"))) smooth(pos, vcell, nv, quads, nq, ox, oy, oz, s);
 
         // the material seen from outside: rays from in front of each face into the model, first surface hit votes
         TriangleGrid.Query query = grid.newQuery();

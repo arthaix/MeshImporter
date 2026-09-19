@@ -35,6 +35,7 @@ public final class Net {
         CH.registerMessage(MsgTeleport.Handler.class, MsgTeleport.class, id++, Side.SERVER);
         CH.registerMessage(MsgAnchorSettings.Handler.class, MsgAnchorSettings.class, id++, Side.SERVER);
         CH.registerMessage(MsgWebTexture.Handler.class, MsgWebTexture.class, id++, Side.SERVER);
+        CH.registerMessage(MsgBreakAnchor.Handler.class, MsgBreakAnchor.class, id++, Side.SERVER);
     }
 
     /** Runs the handler body on the server thread with the sending player. */

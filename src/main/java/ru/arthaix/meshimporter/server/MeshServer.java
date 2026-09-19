@@ -12,6 +12,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import net.minecraft.block.state.IBlockState;
 import net.minecraft.command.ICommandSender;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemBlock;
@@ -29,6 +30,8 @@ import net.minecraft.util.text.TextFormatting;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.common.DimensionManager;
+import net.minecraftforge.event.entity.player.PlayerInteractEvent;
+import net.minecraftforge.event.world.BlockEvent;
 import net.minecraftforge.event.world.WorldEvent;
 import net.minecraftforge.fml.common.FMLCommonHandler;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
@@ -36,12 +39,14 @@ import net.minecraftforge.fml.common.gameevent.PlayerEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent;
 import ru.arthaix.meshimporter.MeshImporter;
 import ru.arthaix.meshimporter.MeshImporterConfig;
+import ru.arthaix.meshimporter.block.BlockMeshAnchor;
 import ru.arthaix.meshimporter.block.TileEntityMeshAnchor;
 import ru.arthaix.meshimporter.collision.TriangleGrid;
 import ru.arthaix.meshimporter.common.ImportSettings;
 import ru.arthaix.meshimporter.common.Transform;
 import ru.arthaix.meshimporter.instance.LoadedInstance;
 import ru.arthaix.meshimporter.instance.MeshInstance;
+import ru.arthaix.meshimporter.compat.MeshRailLayer;
 import ru.arthaix.meshimporter.compat.RailSupport;
 import ru.arthaix.meshimporter.instance.MeshWorld;
 import ru.arthaix.meshimporter.model.MeshModel;
@@ -77,6 +82,8 @@ public final class MeshServer {
     private MeshRegistry registry;
     /** Ticks since the remembered mesh-carried rails were last checked. */
     private int railTicks;
+    /** Track being laid along a drawn line, a few pieces per tick so the server keeps running. */
+    private RailJob railJob;
     /** When each player was last told why a click on a model did nothing. */
     private final Map<UUID, Long> told = new HashMap<>();
     private final Map<UUID, Upload> uploads = new HashMap<>();
@@ -458,9 +465,143 @@ public final class MeshServer {
         player.sendStatusMessage(new TextComponentString(TextFormatting.GRAY + "MeshImporter: " + text), true);
     }
 
+    // ---- anchor protection ----
+
+    /** The anchor the owner is removing right now; every other way of losing the block is undone. */
+    private BlockPos authorisedPos;
+    private int authorisedDim;
+    /** Anchors something else took out, waiting to be put back at the end of the tick. */
+    private final List<Object[]> anchorRestores = new ArrayList<>();
+
+    public boolean isAuthorisedBreak(World world, BlockPos pos) {
+        return authorisedPos != null && authorisedPos.equals(pos) && authorisedDim == world.provider.getDimension();
+    }
+
+    /** The player held the attack button for five seconds: the anchor goes, and its models with it. */
+    public void breakAnchor(EntityPlayerMP player, BlockPos pos) {
+        if (!isAllowed(player)) {
+            chat(player, TextFormatting.RED + "You need creative mode or op to remove an anchor.");
+            return;
+        }
+        WorldServer world = player.getServerWorld();
+        if (player.getDistanceSq(pos) > 100 || !(world.getBlockState(pos).getBlock() instanceof BlockMeshAnchor)) return;
+        authorisedPos = pos;
+        authorisedDim = world.provider.getDimension();
+        try {
+            world.setBlockToAir(pos);
+        } finally {
+            authorisedPos = null;
+        }
+        MeshImporter.logger.info("[meshimporter] " + player.getName() + " removed the anchor at " + pos);
+    }
+
+    public void restoreAnchor(World world, BlockPos pos, IBlockState state, NBTTagCompound saved) {
+        anchorRestores.add(new Object[] { world.provider.getDimension(), pos.toImmutable(), state, saved });
+    }
+
+    private void tickAnchorRestores() {
+        if (anchorRestores.isEmpty()) return;
+        MinecraftServer s = server();
+        if (s == null) return;
+        List<Object[]> todo = new ArrayList<>(anchorRestores);
+        anchorRestores.clear();
+        for (Object[] r : todo) {
+            WorldServer world = s.getWorld((Integer) r[0]);
+            BlockPos pos = (BlockPos) r[1];
+            if (world == null) continue;
+            if (!world.isBlockLoaded(pos)) {
+                anchorRestores.add(r);
+                continue;
+            }
+            if (world.getBlockState(pos).getBlock() instanceof BlockMeshAnchor) continue;
+            world.setBlockState(pos, (IBlockState) r[2], 3);
+            TileEntity te = world.getTileEntity(pos);
+            if (te != null && r[3] != null) {
+                te.readFromNBT((NBTTagCompound) r[3]);
+                te.markDirty();
+                world.notifyBlockUpdate(pos, (IBlockState) r[2], (IBlockState) r[2], 3);
+            }
+            MeshImporter.logger.info("[meshimporter] the anchor at " + pos + " was taken out by something else and is back, models untouched");
+        }
+    }
+
+    /** A click never starts breaking an anchor, in any game mode: removal is the five-second hold. */
+    @SubscribeEvent
+    public void onLeftClickAnchor(PlayerInteractEvent.LeftClickBlock event) {
+        if (event.getWorld().getBlockState(event.getPos()).getBlock() instanceof BlockMeshAnchor) event.setCanceled(true);
+    }
+
+    @SubscribeEvent
+    public void onBreakAnchor(BlockEvent.BreakEvent event) {
+        if (event.getState().getBlock() instanceof BlockMeshAnchor && !isAuthorisedBreak(event.getWorld(), event.getPos())) event.setCanceled(true);
+    }
+
+    /** One line of track on its way into the world. */
+    private static final class RailJob {
+        UUID player;
+        ItemStack blueprint;
+        List<double[]> points;
+        double curvosity;
+        int perTick, at, laid, refused, told;
+        String name;
+    }
+
+    /** Starts laying track along a line; the pieces go in over the following ticks. */
+    public void layRails(EntityPlayerMP player, ItemStack blueprint, List<double[]> points, double curvosity, int perTick, String name) {
+        RailJob job = new RailJob();
+        job.player = player.getUniqueID();
+        job.blueprint = blueprint.copy();
+        job.points = points;
+        job.curvosity = curvosity;
+        job.perTick = Math.max(1, perTick);
+        job.name = name;
+        railJob = job;
+        chat(player, TextFormatting.GRAY + "Laying " + (points.size() - 1) + " pieces of track along " + name + "...");
+    }
+
+    public boolean layingRails() {
+        return railJob != null;
+    }
+
+    public void stopLayingRails(ICommandSender sender) {
+        RailJob job = railJob;
+        railJob = null;
+        if (job != null) msg(sender, TextFormatting.YELLOW + "Stopped after " + job.laid + " pieces of " + job.name);
+    }
+
+    private void tickRails() {
+        RailJob job = railJob;
+        if (job == null) return;
+        MinecraftServer s = server();
+        EntityPlayerMP player = s == null ? null : s.getPlayerList().getPlayerByUUID(job.player);
+        if (player == null) {
+            railJob = null;
+            return;
+        }
+        int[] done = MeshRailLayer.lay(player, job.blueprint, job.points, job.curvosity, job.at, job.perTick);
+        job.laid += done[0];
+        job.refused += done[1];
+        job.at += job.perTick;
+        int total = job.points.size() - 1;
+        if (job.at < total) {
+            int percent = 100 * job.at / Math.max(1, total);
+            if (percent >= job.told + 10) {
+                job.told = percent;
+                chat(player, TextFormatting.GRAY + job.name + ": " + percent + "%, " + job.laid + " pieces laid");
+            }
+            return;
+        }
+        railJob = null;
+        chat(player, TextFormatting.GREEN + job.name + " done: " + job.laid + " pieces laid"
+            + (job.refused > 0 ? TextFormatting.YELLOW + ", " + job.refused + " refused (something is in the way)" : ""));
+        MeshImporter.logger.info("[meshimporter] track along " + job.name + ": " + job.laid + " laid, " + job.refused + " refused");
+    }
+
     @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
+        tickAnchorRestores();
+        tickRails();
         // every five minutes: the rails a mesh once carried, whose rail is gone by now, are forgotten
         if (++railTicks >= 6000) {
             railTicks = 0;

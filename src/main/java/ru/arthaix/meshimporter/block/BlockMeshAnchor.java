@@ -1,10 +1,13 @@
 package ru.arthaix.meshimporter.block;
 
 import net.minecraft.block.Block;
+import net.minecraft.block.material.EnumPushReaction;
 import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.creativetab.CreativeTabs;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.EntityPlayer;
+import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.BlockRenderLayer;
 import net.minecraft.util.EnumBlockRenderType;
@@ -26,8 +29,9 @@ public class BlockMeshAnchor extends Block {
         super(Material.IRON);
         setRegistryName(MeshImporter.MOD_ID, "mesh_anchor");
         setTranslationKey(MeshImporter.MOD_ID + ".mesh_anchor");
-        setHardness(1.5f);
-        setResistance(10f);
+        // an anchor holds whole models: it cannot be mined, blown up or pushed, only removed on purpose
+        setBlockUnbreakable();
+        setResistance(6000000f);
         setCreativeTab(CreativeTabs.DECORATIONS);
     }
 
@@ -73,8 +77,31 @@ public class BlockMeshAnchor extends Block {
     }
 
     @Override
+    public EnumPushReaction getPushReaction(IBlockState state) {
+        return EnumPushReaction.BLOCK;
+    }
+
+    @Override
+    public boolean canEntityDestroy(IBlockState state, IBlockAccess world, BlockPos pos, Entity entity) {
+        return false;
+    }
+
+    /**
+     * Anything that replaces the block ends up here - a player, /setblock, /fill, WorldEdit and its //set, an
+     * explosion. Only the removal the owner asked for (five seconds of holding the attack button) takes the models
+     * with it; after anything else the anchor comes back at the end of the tick with everything it knew, and the
+     * models stay where they are.
+     */
+    @Override
     public void breakBlock(World world, BlockPos pos, IBlockState state) {
-        if (!world.isRemote) MeshServer.INSTANCE.onAnchorBroken(world, pos);
+        if (!world.isRemote) {
+            if (MeshServer.INSTANCE.isAuthorisedBreak(world, pos)) {
+                MeshServer.INSTANCE.onAnchorBroken(world, pos);
+            } else {
+                TileEntity te = world.getTileEntity(pos);
+                MeshServer.INSTANCE.restoreAnchor(world, pos, state, te == null ? null : te.writeToNBT(new NBTTagCompound()));
+            }
+        }
         super.breakBlock(world, pos, state);
     }
 }
