@@ -83,7 +83,7 @@ public class CommandMeshImporter extends CommandBase {
             m.stopLayingRails(sender);
             return;
         }
-        if (args.length < 4) throw new CommandException("/meshimporter rails <file> <line|all> <model> [longest piece] [tolerance] [clear|clearonly] [over] [from-to]");
+        if (args.length < 4) throw new CommandException("/meshimporter rails <file> <line|all> <model> [longest piece] [tolerance] [clear|clearonly] [over] [turnout] [from-to]");
         if (m.layingRails()) throw new CommandException("Track is already being laid; /meshimporter rails stop");
         EntityPlayerMP player = getCommandSenderAsPlayer(sender);
         ItemStack blueprint = player.getHeldItemMainhand();
@@ -99,7 +99,7 @@ public class CommandMeshImporter extends CommandBase {
             if (args[i].matches("[0-9]+")) longest = parseDouble(args[i], 8, 400);
             else if (args[i].matches("0[.][0-9]+")) tolerance = parseDouble(args[i], 0.001, 1);
         }
-        boolean clear = false, over = false, clearOnly = false;
+        boolean clear = false, over = false, clearOnly = false, turnout = false;
         for (String arg : args) {
             if ("clear".equalsIgnoreCase(arg)) clear = true;
             // take the old track out and stop there. Laying a line in two commands needs this: clearing reaches a
@@ -108,6 +108,8 @@ public class CommandMeshImporter extends CommandBase {
             // for a crossover: let a piece be laid through track that is already there, the way a turnout shares
             // ground with the line it leaves
             if ("over".equalsIgnoreCase(arg)) over = true;
+            // build the first piece of the line as a switch: the line it leaves goes straight through it
+            if ("turnout".equalsIgnoreCase(arg)) turnout = true;
         }
 
         Map<String, List<double[][]>> lines;
@@ -170,7 +172,7 @@ public class CommandMeshImporter extends CommandBase {
         MeshServer.msg(sender, TextFormatting.GRAY + "Blueprint: " + MeshRailLayer.describe(blueprint));
         MeshServer.msg(sender, TextFormatting.GRAY + String.format("%.0f blocks of line in %d pieces of %.0f to %.0f blocks, never over %.0f cm off the line",
             total, pieces.size(), shortestPiece, longestPiece, tolerance * 100));
-        m.layRails(player, blueprint, pieces, 0, over, 2, args[2] + " of " + file.getName());
+        m.layRails(player, blueprint, pieces, 0, over, turnout, 2, args[2] + " of " + file.getName());
     }
 
     @Override

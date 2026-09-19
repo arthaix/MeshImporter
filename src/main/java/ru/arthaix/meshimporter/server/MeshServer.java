@@ -542,19 +542,20 @@ public final class MeshServer {
         ItemStack blueprint;
         List<double[][]> pieces;
         double curvosity;
-        boolean over;
+        boolean over, turnout;
         int perTick, at, laid, refused, told;
         String name;
     }
 
     /** Starts laying track along a line; the pieces go in over the following ticks. */
-    public void layRails(EntityPlayerMP player, ItemStack blueprint, List<double[][]> pieces, double curvosity, boolean over, int perTick, String name) {
+    public void layRails(EntityPlayerMP player, ItemStack blueprint, List<double[][]> pieces, double curvosity, boolean over, boolean turnout, int perTick, String name) {
         RailJob job = new RailJob();
         job.player = player.getUniqueID();
         job.blueprint = blueprint.copy();
         job.pieces = pieces;
         job.curvosity = curvosity;
         job.over = over;
+        job.turnout = turnout;
         job.perTick = Math.max(1, perTick);
         job.name = name;
         railJob = job;
@@ -580,7 +581,7 @@ public final class MeshServer {
             railJob = null;
             return;
         }
-        int[] done = MeshRailLayer.lay(player, job.blueprint, job.pieces, job.curvosity, job.over, job.at, job.perTick);
+        int[] done = MeshRailLayer.lay(player, job.blueprint, job.pieces, job.curvosity, job.over, job.turnout, job.at, job.perTick);
         job.laid += done[0];
         job.refused += done[1];
         job.at += job.perTick;

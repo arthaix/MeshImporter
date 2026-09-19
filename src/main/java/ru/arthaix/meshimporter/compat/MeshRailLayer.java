@@ -26,8 +26,8 @@ public final class MeshRailLayer {
     private static boolean looked;
     private static Constructor<?> umcStack, umcPlayer, umcVec3d, umcVec3i, placementInfo, railInfo;
     private static Method settingsFrom, withSettings, build, getBuilder, canBuild, umcWorldGet;
-    private static Object trackCustom, directionNone;
-    private static Field mType, mLength, mCurvosity, mPreview, overrideFlexible;
+    private static Object trackCustom, trackSwitch, directionNone, directionLeft, directionRight;
+    private static Field mType, mLength, mCurvosity, mPreview, mDirection, overrideFlexible;
     /** The first few pieces that were refused, for the log: without them a refusal is silent. */
     private static int complained;
 
@@ -41,9 +41,15 @@ public final class MeshRailLayer {
      * gives way to a builder that asks. Only the anchor is held. That is the one way two routes can share ground
      * the way they do at a turnout, and without it a crossover cannot be laid at all - the tracks it joins are
      * five blocks apart and a track reserves four, so every part of the connection falls inside one or the other.
+     *
+     * <p>With {@code turnout}, the first piece of the line is built as a switch rather than plain track. Immersive
+     * Railroading makes a switch of a straight and a second route, and takes that second route as a curve of its own
+     * shape whenever its far end is somewhere other than where the straight begins - which is exactly the piece drawn
+     * here. So the turnout comes out with the geometry of the line, the line it leaves runs straight through it, and
+     * the switch decides which of the two a train takes instead of the two merely sharing the ground.
      */
     public static int[] lay(EntityPlayerMP player, ItemStack blueprint, List<double[][]> pieces, double curvosity,
-        boolean over, int from, int count) {
+        boolean over, boolean turnout, int from, int count) {
         if (!lookup()) return new int[] { 0, 0 };
         int laid = 0, refused = 0;
         try {
@@ -72,9 +78,13 @@ public final class MeshRailLayer {
                 Object start = placementInfo.newInstance(vec3d(ra), directionNone, yawA, vec3d(ca));
                 Object end = placementInfo.newInstance(vec3d(rb), directionNone, yawB, vec3d(cb));
                 Object info = railInfo.newInstance(stack, start, end);
+                final boolean isTurnout = turnout && i == 0;
+                // which way it leaves, for the switch stand and the rendered points
+                double turn = ((piece[2][1] - piece[2][0]) % 360 + 540) % 360 - 180;
                 info = withSettings.invoke(info, (Consumer<Object>) mutable -> {
                     try {
-                        mType.set(mutable, trackCustom);
+                        mType.set(mutable, isTurnout ? trackSwitch : trackCustom);
+                        if (isTurnout) mDirection.set(mutable, turn < 0 ? directionLeft : directionRight);
                         mLength.setInt(mutable, length);
                         if (curvosity > 0) mCurvosity.setFloat(mutable, (float) curvosity);
                         mPreview.setBoolean(mutable, false);
@@ -168,6 +178,10 @@ public final class MeshRailLayer {
             withSettings = cInfo.getMethod("withSettings", Consumer.class);
             build = cInfo.getMethod("build", cPlayer, cVec3i, boolean.class);
             trackCustom = Enum.valueOf((Class<Enum>) cItems.asSubclass(Enum.class), "CUSTOM");
+            trackSwitch = Enum.valueOf((Class<Enum>) cItems.asSubclass(Enum.class), "SWITCH");
+            directionLeft = Enum.valueOf((Class<Enum>) cDirection.asSubclass(Enum.class), "LEFT");
+            directionRight = Enum.valueOf((Class<Enum>) cDirection.asSubclass(Enum.class), "RIGHT");
+            mDirection = cMutable.getField("direction");
             mType = cMutable.getField("type");
             mLength = cMutable.getField("length");
             mCurvosity = cMutable.getField("curvosity");
