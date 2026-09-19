@@ -44,12 +44,22 @@ public final class MeshRails {
         }
     }
 
-    /** Mesh geometry right under the rail (or just below its own block), the way solid ground would be. */
+    /**
+     * Mesh geometry that can hold this rail. A model carries its railway at whatever height it was drawn at, which is
+     * hardly ever a block boundary: a track laid at 36.99 gets the block at 36 while the embankment surface is 37.01,
+     * a block above its base. The band reaches from just under the block to well over it, so a rail that sits on the
+     * surface of a model counts as standing on ground however the height fell between blocks.
+     */
+    /** Whether a mesh would hold a rail at this block, asked straight out (the log of the laying command uses it). */
+    public static boolean onMeshAt(World world, BlockPos pos) {
+        return carried(world, pos);
+    }
+
     private static boolean carried(World world, BlockPos pos) {
         MeshWorld meshes = MeshWorld.of(world);
         int dim = world.provider.getDimension();
         if (meshes.isEmpty(dim)) return false;
-        AxisAlignedBB box = new AxisAlignedBB(pos.getX() + 0.05, pos.getY() - 0.4, pos.getZ() + 0.05, pos.getX() + 0.95, pos.getY() + 0.3, pos.getZ() + 0.95);
+        AxisAlignedBB box = new AxisAlignedBB(pos.getX() + 0.05, pos.getY() - 0.6, pos.getZ() + 0.05, pos.getX() + 0.95, pos.getY() + 1.4, pos.getZ() + 0.95);
         List<AxisAlignedBB> boxes = new ArrayList<>();
         for (LoadedInstance li : meshes.inDimension(dim)) {
             if (li.preview || !li.instance.intersects(box)) continue;

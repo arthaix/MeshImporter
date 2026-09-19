@@ -25,9 +25,11 @@ public final class MeshRailLayer {
 
     private static boolean looked;
     private static Constructor<?> umcStack, umcPlayer, umcVec3d, umcVec3i, placementInfo, railInfo;
-    private static Method settingsFrom, withSettings, build;
-    private static Object trackCustom;
+    private static Method settingsFrom, withSettings, build, getBuilder, canBuild, umcWorldGet;
+    private static Object trackCustom, directionNone;
     private static Field mType, mLength, mCurvosity, mPreview;
+    /** The first few pieces that were refused, for the log: without them a refusal is silent. */
+    private static int complained;
 
     private MeshRailLayer() {}
 
@@ -46,24 +48,50 @@ public final class MeshRailLayer {
                 // the heading of the line at each end, so neighbouring pieces meet without a kink
                 float yawA = RailPaths.yaw(before, b);
                 float yawB = RailPaths.yaw(a, after);
-                int length = Math.max(1, (int) Math.ceil(RailPaths.distance(a, b)));
+                double chord = RailPaths.distance(a, b);
+                int length = Math.max(1, (int) Math.ceil(chord));
 
-                Object start = placementInfo.newInstance(stack, yawA, vec3d(a));
-                Object end = placementInfo.newInstance(stack, yawB, vec3d(b));
+                // Everything a track piece is made of is written relative to the block it is built from, and the
+                // placement constructor that takes an item snaps both the heading and the position to the grid of the
+                // blueprint's position mode. The four-part one keeps exactly what it is given, so the piece can follow
+                // the drawn line: the two ends, their headings, and a control point a third of the way along each
+                // heading - the plain smooth fit between two points and two directions.
+                double bx = Math.floor(a[0]), by = Math.floor(a[1]), bz = Math.floor(a[2]);
+                double[] ra = { a[0] - bx, a[1] - by, a[2] - bz };
+                double[] rb = { b[0] - bx, b[1] - by, b[2] - bz };
+                double arm = chord / 3;
+                double[] ca = { ra[0] - Math.sin(Math.toRadians(yawA)) * arm, ra[1] + (rb[1] - ra[1]) / 3, ra[2] + Math.cos(Math.toRadians(yawA)) * arm };
+                double[] cb = { rb[0] + Math.sin(Math.toRadians(yawB)) * arm, rb[1] - (rb[1] - ra[1]) / 3, rb[2] - Math.cos(Math.toRadians(yawB)) * arm };
+                Object start = placementInfo.newInstance(vec3d(ra), directionNone, yawA, vec3d(ca));
+                Object end = placementInfo.newInstance(vec3d(rb), directionNone, yawB, vec3d(cb));
                 Object info = railInfo.newInstance(stack, start, end);
                 info = withSettings.invoke(info, (Consumer<Object>) mutable -> {
                     try {
                         mType.set(mutable, trackCustom);
                         mLength.setInt(mutable, length);
-                        mCurvosity.setFloat(mutable, (float) curvosity);
+                        if (curvosity > 0) mCurvosity.setFloat(mutable, (float) curvosity);
                         mPreview.setBoolean(mutable, false);
                     } catch (IllegalAccessException e) {
                         throw new IllegalStateException(e);
                     }
                 });
-                Object pos = umcVec3i.newInstance(Math.floor(a[0]), Math.floor(a[1]), Math.floor(a[2]));
-                if (Boolean.TRUE.equals(build.invoke(info, who, pos))) laid++;
-                else refused++;
+                Object pos = umcVec3i.newInstance(bx, by, bz);
+                // the ground has to be there to be asked about: a piece 300 blocks away is in no loaded chunk
+                player.getServerWorld().getChunk(new BlockPos(a[0], a[1], a[2]));
+                player.getServerWorld().getChunk(new BlockPos(b[0], b[1], b[2]));
+                Object world = umcWorldGet.invoke(null, player.getServerWorld());
+                Object builder = getBuilder.invoke(info, world, pos);
+                if (!Boolean.TRUE.equals(canBuild.invoke(builder))) {
+                    refused++;
+                    if (complained++ < 5)
+                        MeshImporter.logger.info("[meshimporter] no room for track at " + String.format("%.1f %.1f %.1f", a[0], a[1], a[2])
+                            + " (block " + new BlockPos(a[0], a[1], a[2]) + ", the mesh there "
+                            + (MeshRails.onMeshAt(player.getServerWorld(), new BlockPos(a[0], a[1], a[2])) ? "does" : "does NOT") + " count as ground)");
+                    continue;
+                }
+                // the two-argument build only says the list came back non-null, which it does even after a refusal
+                build.invoke(info, who, pos, true);
+                laid++;
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             MeshImporter.logger.warn("Laying track stopped after " + laid + " pieces: " + e);
@@ -112,15 +140,22 @@ public final class MeshRailLayer {
             Class<?> cInfo = Class.forName("cam72cam.immersiverailroading.util.RailInfo", false, cl);
             Class<?> cItems = Class.forName("cam72cam.immersiverailroading.library.TrackItems", false, cl);
 
+            Class<?> cWorld = Class.forName("cam72cam.mod.world.World", false, cl);
+            Class<?> cBuilder = Class.forName("cam72cam.immersiverailroading.track.BuilderBase", false, cl);
+            umcWorldGet = cWorld.getMethod("get", net.minecraft.world.World.class);
+            getBuilder = cInfo.getMethod("getBuilder", cWorld, cVec3i);
+            canBuild = cBuilder.getMethod("canBuild");
             umcStack = cStack.getConstructor(net.minecraft.item.ItemStack.class);
             umcPlayer = cPlayer.getConstructor(net.minecraft.entity.player.EntityPlayer.class);
             umcVec3d = cVec3d.getConstructor(double.class, double.class, double.class);
             umcVec3i = cVec3i.getConstructor(double.class, double.class, double.class);
-            placementInfo = cPlacement.getConstructor(cStack, float.class, cVec3d);
+            Class<?> cDirection = Class.forName("cam72cam.immersiverailroading.library.TrackDirection", false, cl);
+            placementInfo = cPlacement.getConstructor(cVec3d, cDirection, float.class, cVec3d);
+            directionNone = Enum.valueOf((Class<Enum>) cDirection.asSubclass(Enum.class), "NONE");
             railInfo = cInfo.getConstructor(cStack, cPlacement, cPlacement);
             settingsFrom = cSettings.getMethod("from", cStack);
             withSettings = cInfo.getMethod("withSettings", Consumer.class);
-            build = cInfo.getMethod("build", cPlayer, cVec3i);
+            build = cInfo.getMethod("build", cPlayer, cVec3i, boolean.class);
             trackCustom = Enum.valueOf((Class<Enum>) cItems.asSubclass(Enum.class), "CUSTOM");
             mType = cMutable.getField("type");
             mLength = cMutable.getField("length");
