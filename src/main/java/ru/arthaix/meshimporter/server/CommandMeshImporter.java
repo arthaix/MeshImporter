@@ -104,6 +104,36 @@ public class CommandMeshImporter extends CommandBase {
         if (!file.isFile()) throw new CommandException("No line file " + file.getPath());
         MeshInstance in = m.registry() == null ? null : m.registry().find(parseInt(args[3], 1));
         if (in == null) throw new CommandException("No model #" + args[3]);
+        // A layout worked out beforehand: every piece given outright as four points - where it starts, a point along
+        // its heading there, a point along its heading at the far end, and where it ends - in the order they are to
+        // be laid. Nothing is cut, fitted or estimated here, so the joints are the ones that were drawn and every
+        // anchor lands where it was planned to. Entries with "switch" in their name are built as turnouts.
+        if ("pieces".equalsIgnoreCase(args[2])) {
+            boolean laidOver = false;
+            for (String arg : args) if ("over".equalsIgnoreCase(arg)) laidOver = true;
+            Map<String, List<double[][]>> given;
+            try {
+                given = RailPaths.read(file);
+            } catch (IOException e) {
+                throw new CommandException("Cannot read " + file.getName() + ": " + e.getMessage());
+            }
+            List<double[][]> ready = new ArrayList<>();
+            int turnouts = 0;
+            for (Map.Entry<String, List<double[][]>> e : given.entrySet()) {
+                boolean isSwitch = e.getKey().toLowerCase(java.util.Locale.ROOT).contains("switch");
+                for (double[][] four : e.getValue()) {
+                    if (four.length != 4) throw new CommandException(e.getKey() + ": a piece is four points, this one has " + four.length);
+                    double[][] w = RailPaths.toWorld(four, in);
+                    ready.add(new double[][] { w[0], w[3], { RailPaths.yaw(w[0], w[1]), RailPaths.yaw(w[2], w[3]), isSwitch ? 1 : 0 } });
+                    if (isSwitch) turnouts++;
+                }
+            }
+            if (ready.isEmpty()) throw new CommandException("No pieces in " + file.getName());
+            MeshServer.msg(sender, TextFormatting.GRAY + "Blueprint: " + MeshRailLayer.describe(blueprint));
+            MeshServer.msg(sender, TextFormatting.GRAY + "" + ready.size() + " pieces as drawn, " + turnouts + " of them turnouts");
+            m.layRails(player, blueprint, ready, 0, laidOver, false, 2, "layout " + file.getName());
+            return;
+        }
         // how long a piece may grow, and how far it may ever stray from the drawn line
         double longest = 200, tolerance = 0.01;
         for (int i = 4; i < args.length; i++) {

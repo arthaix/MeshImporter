@@ -78,7 +78,7 @@ public final class MeshRailLayer {
                 Object start = placementInfo.newInstance(vec3d(ra), directionNone, yawA, vec3d(ca));
                 Object end = placementInfo.newInstance(vec3d(rb), directionNone, yawB, vec3d(cb));
                 Object info = railInfo.newInstance(stack, start, end);
-                final boolean isTurnout = turnout && i == 0;
+                final boolean isTurnout = (turnout && i == 0) || (piece[2].length > 2 && piece[2][2] > 0.5);
                 // which way it leaves, for the switch stand and the rendered points
                 double turn = ((piece[2][1] - piece[2][0]) % 360 + 540) % 360 - 180;
                 info = withSettings.invoke(info, (Consumer<Object>) mutable -> {
