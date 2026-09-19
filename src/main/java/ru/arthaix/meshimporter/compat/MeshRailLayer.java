@@ -118,24 +118,40 @@ public final class MeshRailLayer {
         return new int[] { laid, refused };
     }
 
-    /** Takes out the Immersive Railroading blocks near a line, so new track has room. */
-    public static int clear(World world, List<double[]> points, double radius) {
-        int removed = 0;
+    /**
+     * Every block near a line that a track could be in the way at, as one list to work through.
+     *
+     * <p>Kept apart from the taking out because a line is tens of kilometres long: emptying it in one go is hundreds
+     * of thousands of block changes inside a single tick, which stops the server dead for a minute and buries
+     * whatever else batches block edits. The caller takes them out a few thousand at a time.
+     */
+    public static List<BlockPos> around(List<double[]> points, double radius) {
         int r = (int) Math.ceil(radius);
         java.util.Set<Long> done = new java.util.HashSet<>();
+        List<BlockPos> out = new java.util.ArrayList<>();
         for (double[] p : points) {
-            world.getChunk(new BlockPos(p[0], p[1], p[2]));
             BlockPos centre = new BlockPos(p[0], p[1], p[2]);
             for (int dx = -r; dx <= r; dx++)
                 for (int dy = -r; dy <= r; dy++)
                     for (int dz = -r; dz <= r; dz++) {
                         BlockPos at = centre.add(dx, dy, dz);
-                        if (!done.add(at.toLong()) || !world.isBlockLoaded(at)) continue;
-                        ResourceLocation name = world.getBlockState(at).getBlock().getRegistryName();
-                        if (name == null || !"immersiverailroading".equals(name.getNamespace())) continue;
-                        world.setBlockToAir(at);
-                        removed++;
+                        if (done.add(at.toLong())) out.add(at);
                     }
+        }
+        return out;
+    }
+
+    /** Takes the Immersive Railroading blocks out of that stretch of the list; the blocks it took out. */
+    public static int clear(World world, List<BlockPos> where, int from, int count) {
+        int removed = 0;
+        for (int i = from; i < where.size() && i < from + count; i++) {
+            BlockPos at = where.get(i);
+            world.getChunk(at);
+            if (!world.isBlockLoaded(at)) continue;
+            ResourceLocation name = world.getBlockState(at).getBlock().getRegistryName();
+            if (name == null || !"immersiverailroading".equals(name.getNamespace())) continue;
+            world.setBlockToAir(at);
+            removed++;
         }
         return removed;
     }

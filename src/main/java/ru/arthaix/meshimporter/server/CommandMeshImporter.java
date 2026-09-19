@@ -77,6 +77,17 @@ public class CommandMeshImporter extends CommandBase {
      * config/meshimporter/paths, a placed model says where it lands in the world, and the blueprint in hand gives the
      * gauge, the rail bed and the track style.
      */
+    /**
+     * The player the command is laying track for. {@code getCommandSenderAsPlayer} wants the sender itself to be the
+     * player, which rules out {@code /execute <player> ~ ~ ~ meshimporter ...} - and that is the one way a whole
+     * sequence of these can be run from a console or over rcon. Whoever the command is run as counts here.
+     */
+    private static EntityPlayerMP playerOf(ICommandSender sender) throws CommandException {
+        if (sender instanceof EntityPlayerMP) return (EntityPlayerMP) sender;
+        if (sender.getCommandSenderEntity() instanceof EntityPlayerMP) return (EntityPlayerMP) sender.getCommandSenderEntity();
+        throw new CommandException("Run this as a player, or with /execute <player> ~ ~ ~ meshimporter ...");
+    }
+
     private void rails(MinecraftServer server, ICommandSender sender, String[] args) throws CommandException {
         MeshServer m = MeshServer.INSTANCE;
         if (args.length >= 2 && "stop".equalsIgnoreCase(args[1])) {
@@ -85,7 +96,7 @@ public class CommandMeshImporter extends CommandBase {
         }
         if (args.length < 4) throw new CommandException("/meshimporter rails <file> <line|all> <model> [longest piece] [tolerance] [clear|clearonly] [over] [turnout] [from-to]");
         if (m.layingRails()) throw new CommandException("Track is already being laid; /meshimporter rails stop");
-        EntityPlayerMP player = getCommandSenderAsPlayer(sender);
+        EntityPlayerMP player = playerOf(sender);
         ItemStack blueprint = player.getHeldItemMainhand();
         if (!MeshRailLayer.isBlueprint(blueprint)) throw new CommandException("Hold an Immersive Railroading track blueprint");
 
@@ -164,11 +175,16 @@ public class CommandMeshImporter extends CommandBase {
         if (used == 0) throw new CommandException("No line called " + args[2] + " in " + file.getName() + " (it holds: " + String.join(", ", lines.keySet()) + ")");
         if (pieces.isEmpty()) throw new CommandException("Nothing of that line to lay");
 
+        // the line is tens of kilometres: the clearing goes a few thousand blocks a tick, and the laying waits for it
         if (clear) {
-            int removed = MeshRailLayer.clear(player.getServerWorld(), along, 3);
-            MeshServer.msg(sender, TextFormatting.GRAY + "Removed " + removed + " blocks of old track along the line");
+            final List<double[][]> ready = pieces;
+            final boolean over2 = over, turnout2 = turnout;
+            final String what = args[2] + " of " + file.getName();
+            final ItemStack held = blueprint;
+            m.clearRails(player, MeshRailLayer.around(along, 3), what,
+                clearOnly ? null : who -> m.layRails(who, held, ready, 0, over2, turnout2, 2, what));
+            return;
         }
-        if (clearOnly) return;
         MeshServer.msg(sender, TextFormatting.GRAY + "Blueprint: " + MeshRailLayer.describe(blueprint));
         MeshServer.msg(sender, TextFormatting.GRAY + String.format("%.0f blocks of line in %d pieces of %.0f to %.0f blocks, never over %.0f cm off the line",
             total, pieces.size(), shortestPiece, longestPiece, tolerance * 100));

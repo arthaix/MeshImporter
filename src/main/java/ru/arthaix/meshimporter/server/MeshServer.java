@@ -536,6 +536,58 @@ public final class MeshServer {
         if (event.getState().getBlock() instanceof BlockMeshAnchor && !isAuthorisedBreak(event.getWorld(), event.getPos())) event.setCanceled(true);
     }
 
+    /** Track on its way out of the world, a few thousand blocks a tick. */
+    private static final class ClearJob {
+        UUID player;
+        java.util.List<net.minecraft.util.math.BlockPos> where;
+        int at, removed, told;
+        String name;
+        java.util.function.Consumer<EntityPlayerMP> then;
+    }
+
+    private ClearJob clearJob;
+
+    /**
+     * Starts taking old track out along a line. A line is tens of kilometres, so this cannot be one tick's work:
+     * hundreds of thousands of block changes at once stop the server dead and bury anything that batches block
+     * edits. What follows the clearing is handed in and run when it ends.
+     */
+    public void clearRails(EntityPlayerMP player, java.util.List<net.minecraft.util.math.BlockPos> where, String name,
+        java.util.function.Consumer<EntityPlayerMP> then) {
+        ClearJob job = new ClearJob();
+        job.player = player.getUniqueID();
+        job.where = where;
+        job.name = name;
+        job.then = then;
+        clearJob = job;
+        chat(player, TextFormatting.GRAY + "Taking old track out along " + name + " (" + where.size() + " blocks to look at)...");
+    }
+
+    private void tickClear() {
+        ClearJob job = clearJob;
+        if (job == null) return;
+        MinecraftServer s = server();
+        EntityPlayerMP player = s == null ? null : s.getPlayerList().getPlayerByUUID(job.player);
+        if (player == null) {
+            clearJob = null;
+            return;
+        }
+        int step = 3000;
+        job.removed += MeshRailLayer.clear(player.getServerWorld(), job.where, job.at, step);
+        job.at += step;
+        if (job.at < job.where.size()) {
+            int percent = 100 * job.at / Math.max(1, job.where.size());
+            if (percent >= job.told + 20) {
+                job.told = percent;
+                chat(player, TextFormatting.GRAY + job.name + ": cleared " + percent + "%");
+            }
+            return;
+        }
+        clearJob = null;
+        chat(player, TextFormatting.GRAY + "Took out " + job.removed + " blocks of old track along " + job.name);
+        if (job.then != null) job.then.accept(player);
+    }
+
     /** One line of track on its way into the world. */
     private static final class RailJob {
         UUID player;
@@ -563,10 +615,11 @@ public final class MeshServer {
     }
 
     public boolean layingRails() {
-        return railJob != null;
+        return railJob != null || clearJob != null;
     }
 
     public void stopLayingRails(ICommandSender sender) {
+        clearJob = null;
         RailJob job = railJob;
         railJob = null;
         if (job != null) msg(sender, TextFormatting.YELLOW + "Stopped after " + job.laid + " pieces of " + job.name);
@@ -604,6 +657,7 @@ public final class MeshServer {
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         tickAnchorRestores();
+        tickClear();
         tickRails();
         // every five minutes: the rails a mesh once carried, whose rail is gone by now, are forgotten
         if (++railTicks >= 6000) {
