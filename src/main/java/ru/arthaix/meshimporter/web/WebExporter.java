@@ -40,7 +40,7 @@ import ru.arthaix.meshimporter.model.MeshModelCodec;
  */
 public final class WebExporter {
 
-    public static final int FORMAT = 5;
+    public static final int FORMAT = 6;
     private static final int MAGIC = 0x3157494D; // "MIW1"
     private static final Pattern MODEL_FILE = Pattern.compile("[0-9a-f]{40}(\\.bin|\\.geo\\.json|\\.mat|-lp\\.png|-ln\\.png|-lw\\.png)");
     private static final Pattern TEXTURE_FILE = Pattern.compile("[a-z0-9_]+-[0-9a-f]{8}\\.png");

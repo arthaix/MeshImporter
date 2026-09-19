@@ -16,6 +16,13 @@ import ru.arthaix.meshimporter.model.MeshModel;
 public final class WebProxy {
 
     private static final long MAX_VOXELS = 120_000_000L;
+    /**
+     * Where the surface sits in the density of the coarse lattice. A corner takes the average of the eight cells
+     * around it, so a wall one cell thick puts exactly 0.5 there and at 0.5 nothing at all is built - a whole rail
+     * line or platform roof came out as a handful of triangles. A quarter keeps thin things and only moves the
+     * surface of a solid one about half a cell outwards.
+     */
+    private static final double ISO = 0.25;
     /** Ray offsets across a face, in units of its two edges. */
     private static final double[] RAY_U = { 0, 0.25, -0.25, 0.25, -0.25 }, RAY_W = { 0, 0.25, 0.25, -0.25, -0.25 };
 
@@ -121,7 +128,7 @@ public final class WebProxy {
                     int mask = 0;
                     for (int corner = 0; corner < 8; corner++) {
                         d[corner] = dens[(a + (corner & 1)) + lx * ((bb + ((corner >> 1) & 1)) + ly * (c + ((corner >> 2) & 1)))];
-                        if (d[corner] > 0.5) mask |= 1 << corner;
+                        if (d[corner] > ISO) mask |= 1 << corner;
                     }
                     if (mask == 0 || mask == 255) continue;
                     double sx = 0, sy = 0, sz = 0;
@@ -129,7 +136,7 @@ public final class WebProxy {
                     for (int e = 0; e < 12; e++) {
                         int c0 = EDGES[2 * e], c1 = EDGES[2 * e + 1];
                         if (((mask >> c0) & 1) == ((mask >> c1) & 1)) continue;
-                        double t = (0.5 - d[c0]) / (d[c1] - d[c0]);
+                        double t = (ISO - d[c0]) / (d[c1] - d[c0]);
                         sx += (c0 & 1) + t * ((c1 & 1) - (c0 & 1));
                         sy += ((c0 >> 1) & 1) + t * (((c1 >> 1) & 1) - ((c0 >> 1) & 1));
                         sz += ((c0 >> 2) & 1) + t * (((c1 >> 2) & 1) - ((c0 >> 2) & 1));
@@ -158,9 +165,9 @@ public final class WebProxy {
             for (int k = (axis == 2 ? 0 : 1); k < (axis == 2 ? cz : cz); k++)
                 for (int j = (axis == 1 ? 0 : 1); j < cy; j++)
                     for (int i = (axis == 0 ? 0 : 1); i < cx; i++) {
-                        boolean s0 = dens[i + lx * (j + ly * k)] > 0.5;
+                        boolean s0 = dens[i + lx * (j + ly * k)] > ISO;
                         int i1 = i + (axis == 0 ? 1 : 0), j1 = j + (axis == 1 ? 1 : 0), k1 = k + (axis == 2 ? 1 : 0);
-                        boolean s1 = dens[i1 + lx * (j1 + ly * k1)] > 0.5;
+                        boolean s1 = dens[i1 + lx * (j1 + ly * k1)] > ISO;
                         if (s0 == s1) continue;
                         if (axis == 0) {
                             cells[0] = cell(cx, cy, i, j - 1, k - 1);
