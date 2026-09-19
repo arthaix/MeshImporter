@@ -95,7 +95,10 @@ public final class RailPaths {
         return out;
     }
 
-    /** A jump longer than this means the line is drawn in separate runs: they are laid one by one, not joined. */
+    /**
+     * A jump longer than this means the drawing really is in separate runs. It has to be generous: a straight mile of
+     * railway is drawn with two points, and those long steps are the line, not a hole in it.
+     */
     public static List<double[][]> split(double[][] line, double maxJump) {
         List<double[][]> runs = new ArrayList<>();
         int start = 0;
@@ -125,6 +128,7 @@ public final class RailPaths {
      */
     public static List<double[][]> pieces(double[][] run, double tolerance, double maxLength) {
         List<double[][]> out = new ArrayList<>();
+        run = densify(run, maxLength / 2);
         int i = 0;
         while (i < run.length - 1) {
             // the farthest point still within one piece
@@ -153,6 +157,27 @@ public final class RailPaths {
             i = best;
         }
         return out;
+    }
+
+    /**
+     * Points added along any segment longer than {@code most}. A straight mile drawn with two points would otherwise
+     * not fit in a single piece and the walk over the line would stop there; the added points sit on the segment, so
+     * nothing about the shape changes.
+     */
+    public static double[][] densify(double[][] run, double most) {
+        List<double[]> out = new ArrayList<>();
+        for (int i = 0; i < run.length; i++) {
+            out.add(run[i]);
+            if (i + 1 >= run.length) break;
+            double length = distance(run[i], run[i + 1]);
+            int cuts = (int) Math.ceil(length / most) - 1;
+            for (int k = 1; k <= cuts; k++) {
+                double t = k / (double) (cuts + 1);
+                out.add(new double[] { run[i][0] + (run[i + 1][0] - run[i][0]) * t,
+                    run[i][1] + (run[i + 1][1] - run[i][1]) * t, run[i][2] + (run[i + 1][2] - run[i][2]) * t });
+            }
+        }
+        return out.toArray(new double[0][]);
     }
 
     /** Where the line points at this vertex, measured over a few blocks so a short segment cannot wobble it. */

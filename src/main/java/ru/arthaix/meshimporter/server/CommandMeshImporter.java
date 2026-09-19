@@ -127,7 +127,7 @@ public class CommandMeshImporter extends CommandBase {
             if (!"all".equalsIgnoreCase(args[2]) && !e.getKey().equalsIgnoreCase(args[2])) continue;
             used++;
             for (double[][] line : e.getValue())
-                for (double[][] run : RailPaths.split(RailPaths.toWorld(line, in), 32)) {
+                for (double[][] run : RailPaths.split(RailPaths.toWorld(line, in), 1000)) {
                     double[][] wanted = run;
                     if (range != null) {
                         List<double[]> cut = new ArrayList<>();
@@ -139,14 +139,15 @@ public class CommandMeshImporter extends CommandBase {
                         if (cut.size() < 2) continue;
                         wanted = cut.toArray(new double[0][]);
                     }
+                    // every block of the line, so clearing reaches the whole of it and not just the piece ends
+                    along.addAll(RailPaths.resample(wanted, 1));
                     for (double[][] piece : RailPaths.pieces(wanted, tolerance, longest)) {
                         pieces.add(piece);
                         double length = RailPaths.distance(piece[0], piece[1]);
                         total += length;
                         longestPiece = Math.max(longestPiece, length);
                         shortestPiece = Math.min(shortestPiece, length);
-                        along.add(piece[0]);
-                        along.add(piece[1]);
+
                     }
                 }
         }

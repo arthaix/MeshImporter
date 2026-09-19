@@ -104,6 +104,7 @@ public final class MeshRailLayer {
         int r = (int) Math.ceil(radius);
         java.util.Set<Long> done = new java.util.HashSet<>();
         for (double[] p : points) {
+            world.getChunk(new BlockPos(p[0], p[1], p[2]));
             BlockPos centre = new BlockPos(p[0], p[1], p[2]);
             for (int dx = -r; dx <= r; dx++)
                 for (int dy = -r; dy <= r; dy++)
