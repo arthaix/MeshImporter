@@ -77,6 +77,8 @@ public final class MeshServer {
     private MeshRegistry registry;
     /** Ticks since the remembered mesh-carried rails were last checked. */
     private int railTicks;
+    /** When each player was last told why a click on a model did nothing. */
+    private final Map<UUID, Long> told = new HashMap<>();
     private final Map<UUID, Upload> uploads = new HashMap<>();
     private final Map<UUID, List<Download>> downloads = new HashMap<>();
     private ExecutorService io;
@@ -315,7 +317,10 @@ public final class MeshServer {
     // ---- placing blocks on a mesh ----
 
     public void placeOnMesh(EntityPlayerMP player, BlockPos pos, EnumFacing facing, float hitX, float hitY, float hitZ, EnumHand hand) {
-        if (!MeshImporterConfig.placeOnMesh) return;
+        if (!MeshImporterConfig.placeOnMesh) {
+            tell(player, "Using items on models is switched off in the config (placeOnMesh)");
+            return;
+        }
         if (player.isSpectator()) return;
         ItemStack stack = player.getHeldItem(hand);
         if (stack.isEmpty()) return;
@@ -326,16 +331,27 @@ public final class MeshServer {
         Vec3d look = player.getLookVec();
         Vec3d end = eyes.add(look.x * reach, look.y * reach, look.z * reach);
         TriangleGrid.Hit hit = MeshWorld.SERVER.raycast(world.provider.getDimension(), eyes.x, eyes.y, eyes.z, end.x, end.y, end.z);
-        if (hit == null) return;
+        if (hit == null) {
+            tell(player, "No placed model under your aim (a preview does not count)");
+            return;
+        }
         BlockPos expected = new BlockPos(hit.x + hit.nx * 0.02, hit.y + hit.ny * 0.02, hit.z + hit.nz * 0.02);
-        if (expected.distanceSq(pos) > 4) return;
-        if (stack.getItem() instanceof ItemBlock && !world.getBlockState(pos).getBlock().isReplaceable(world, pos)) return;
+        if (expected.distanceSq(pos) > 4) {
+            tell(player, "The model surface moved while you clicked - try again");
+            return;
+        }
+        if (stack.getItem() instanceof ItemBlock && !world.getBlockState(pos).getBlock().isReplaceable(world, pos)) {
+            tell(player, "There is already a block at " + pos.getX() + " " + pos.getY() + " " + pos.getZ());
+            return;
+        }
         EnumActionResult result = player.interactionManager.processRightClickBlock(player, world, stack, hand, pos, facing, hitX, hitY, hitZ);
         // nothing wanted the cell: use the item on its own, so eating and drawing a bow still work in front of a mesh
         if (result != EnumActionResult.SUCCESS && !player.isHandActive())
             result = player.interactionManager.processRightClick(player, world, stack, hand);
-        if (result != EnumActionResult.SUCCESS)
+        if (result != EnumActionResult.SUCCESS) {
             MeshImporter.logger.info("[meshimporter] " + stack.getItem().getRegistryName() + " did nothing at " + pos + " on a mesh (" + result + ")");
+            tell(player, stack.getDisplayName() + " did nothing at " + pos.getX() + " " + pos.getY() + " " + pos.getZ() + " (" + result + ")");
+        }
     }
 
     // ---- uploads ----
@@ -434,6 +450,15 @@ public final class MeshServer {
     }
 
     @SubscribeEvent
+    /** One line above the hotbar, at most one every two seconds, so a held-down click cannot flood the player. */
+    private void tell(EntityPlayerMP player, String text) {
+        long now = player.getServerWorld().getTotalWorldTime();
+        Long last = told.get(player.getUniqueID());
+        if (last != null && now - last < 40) return;
+        told.put(player.getUniqueID(), now);
+        player.sendStatusMessage(new TextComponentString(TextFormatting.GRAY + "MeshImporter: " + text), true);
+    }
+
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         // every five minutes: the rails a mesh once carried, whose rail is gone by now, are forgotten

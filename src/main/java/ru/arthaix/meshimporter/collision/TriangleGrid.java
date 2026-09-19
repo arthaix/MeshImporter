@@ -51,6 +51,8 @@ public final class TriangleGrid {
         public double x, y, z;
         public double nx, ny, nz;
         public int triangle;
+        /** The model hit is only shown to this player and stands nowhere yet. */
+        public boolean preview;
     }
 
     /** 9 floats per triangle: ax ay az bx by bz cx cy cz (relative to the anchor). */

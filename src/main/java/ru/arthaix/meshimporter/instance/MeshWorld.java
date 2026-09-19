@@ -72,7 +72,10 @@ public final class MeshWorld {
         for (LoadedInstance li : inDimension(dim)) {
             if (!li.instance.intersects(seg)) continue;
             TriangleGrid.Hit h = li.grid.raycast(fx, fy, fz, tx, ty, tz);
-            if (h != null && (best == null || h.t < best.t)) best = h;
+            if (h != null && (best == null || h.t < best.t)) {
+                h.preview = li.preview;
+                best = h;
+            }
         }
         return best;
     }

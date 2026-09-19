@@ -42,6 +42,8 @@ public final class MeshPicking {
     private static final class Target {
         /** Block cell in front of the surface. */
         BlockPos pos;
+        /** The model is only built for this player and stands nowhere yet. */
+        boolean preview;
         EnumFacing facing;
         float hx, hy, hz;
         double x, y, z, nx, ny, nz;
@@ -74,6 +76,12 @@ public final class MeshPicking {
         ItemStack stack = mc.player.getHeldItem(hand);
         if (stack.isEmpty()) return;
         boolean little = holdsLittleTool(mc);
+        if (t.preview) {
+            // the preview stands nowhere yet: the server knows nothing about it and could not put anything on it
+            mc.ingameGUI.setOverlayMessage("This model is only a preview - place it first", false);
+            event.setCanceled(true);
+            return;
+        }
         if (!little) {
             // A block, an Immersive Railroading blueprint, a bucket: the server uses the item at the mesh hit, the
             // same way blocks are placed on a mesh. Running it on the client as well would leave it with blocks the
@@ -186,6 +194,7 @@ public final class MeshPicking {
         RayTraceResult over = mc.objectMouseOver;
         if (over != null && over.typeOfHit != RayTraceResult.Type.MISS && over.hitVec != null && over.hitVec.distanceTo(eyes) <= meshDistance) return null;
         Target t = new Target();
+        t.preview = hit.preview;
         t.x = hit.x;
         t.y = hit.y;
         t.z = hit.z;

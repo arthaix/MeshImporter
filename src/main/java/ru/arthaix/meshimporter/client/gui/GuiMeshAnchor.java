@@ -62,6 +62,8 @@ public class GuiMeshAnchor extends GuiScreen {
     private ImportSettings settings;
     /** Which model of this anchor the screen is editing. */
     private int slot;
+    /** A slot just added here: the anchor learns about it only once the server answers, and until then it counts. */
+    private boolean slotPending;
     private boolean slotListOpen;
     private final List<String> shown = new ArrayList<>();
     private int left, top, scroll;
@@ -84,17 +86,30 @@ public class GuiMeshAnchor extends GuiScreen {
 
     private int slotCount() {
         TileEntityMeshAnchor te = anchor();
-        return Math.max(1, te == null ? 1 : te.slotCount());
+        int count = Math.max(1, te == null ? 1 : te.slotCount());
+        return slotPending ? Math.max(count, slot + 1) : count;
     }
 
     /** Takes the settings of one model of this anchor into the screen. */
     private void loadSlot(int index) {
         TileEntityMeshAnchor te = anchor();
         slot = Math.max(0, index);
+        slotPending = false;
         settings = te != null ? te.settings(slot) : new ImportSettings();
         shown.clear();
         for (MaterialSetup m : settings.materials) shown.add(m.name);
         scroll = 0;
+        showFields();
+    }
+
+    /** Puts the settings of the open slot into the text fields, so the two never say different things. */
+    private void showFields() {
+        if (path == null) return;
+        path.setText(settings.modelPath);
+        scale.setText(trimNumber(settings.scale));
+        offX.setText(String.valueOf(settings.offsetX));
+        offY.setText(String.valueOf(settings.offsetY));
+        offZ.setText(String.valueOf(settings.offsetZ));
     }
 
     /** Saves what is on screen, then switches to another model of this anchor. */
@@ -102,13 +117,6 @@ public class GuiMeshAnchor extends GuiScreen {
         collect();
         save();
         loadSlot(index);
-        if (path != null) {
-            path.setText(settings.modelPath);
-            scale.setText(trimNumber(settings.scale));
-            offX.setText(String.valueOf(settings.offsetX));
-            offY.setText(String.valueOf(settings.offsetY));
-            offZ.setText(String.valueOf(settings.offsetZ));
-        }
         note = "";
         refreshLabels();
         if (!settings.modelPath.isEmpty() && new java.io.File(settings.modelPath).isFile()) scan();
@@ -218,6 +226,8 @@ public class GuiMeshAnchor extends GuiScreen {
         boolean busy = BuildSession.INSTANCE.busy;
         build.enabled = !busy;
         place.enabled = !busy;
+        TileEntityMeshAnchor te = anchor();
+        if (slotPending && te != null && te.slotCount() > slot) slotPending = false;
         int count = slotCount();
         if (slot >= count) loadSlot(count - 1);
         slotButton.displayString = (slot + 1) + "/" + count + "   " + mc.fontRenderer.trimStringToWidth(slotName(slot), 240);
@@ -452,17 +462,12 @@ public class GuiMeshAnchor extends GuiScreen {
                 ImportSettings from = settings.copy();
                 from.modelPath = "";
                 from.materials.clear();
-                loadSlot(slotCount());
+                slot = slotCount();
+                slotPending = true;
                 settings = from;
                 shown.clear();
-                if (path != null) {
-                    path.setText("");
-                    scale.setText(trimNumber(settings.scale));
-                    offX.setText(String.valueOf(settings.offsetX));
-                    offY.setText(String.valueOf(settings.offsetY));
-                    offZ.setText(String.valueOf(settings.offsetZ));
-                }
-                refreshLabels();
+                scroll = 0;
+                showFields();
                 save();
                 note = TextFormatting.GRAY + "Model " + (slot + 1) + ": choose a .obj file, placed like model " + slot;
                 break;
@@ -470,13 +475,6 @@ public class GuiMeshAnchor extends GuiScreen {
                 note = "";
                 BuildSession.INSTANCE.remove(pos, slot, true);
                 loadSlot(Math.max(0, slot - 1));
-                if (path != null) {
-                    path.setText(settings.modelPath);
-                    scale.setText(trimNumber(settings.scale));
-                    offX.setText(String.valueOf(settings.offsetX));
-                    offY.setText(String.valueOf(settings.offsetY));
-                    offZ.setText(String.valueOf(settings.offsetZ));
-                }
                 break;
             case B_BROWSE:
                 FileChooserHelper.choose(settings.modelPath, ClientPrefs.recent(), picked -> {
