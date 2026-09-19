@@ -83,7 +83,7 @@ public class CommandMeshImporter extends CommandBase {
             m.stopLayingRails(sender);
             return;
         }
-        if (args.length < 4) throw new CommandException("/meshimporter rails <file> <line|all> <model> [longest piece] [tolerance] [clear] [from-to]");
+        if (args.length < 4) throw new CommandException("/meshimporter rails <file> <line|all> <model> [longest piece] [tolerance] [clear|clearonly] [over] [from-to]");
         if (m.layingRails()) throw new CommandException("Track is already being laid; /meshimporter rails stop");
         EntityPlayerMP player = getCommandSenderAsPlayer(sender);
         ItemStack blueprint = player.getHeldItemMainhand();
@@ -99,8 +99,16 @@ public class CommandMeshImporter extends CommandBase {
             if (args[i].matches("[0-9]+")) longest = parseDouble(args[i], 8, 400);
             else if (args[i].matches("0[.][0-9]+")) tolerance = parseDouble(args[i], 0.001, 1);
         }
-        boolean clear = false;
-        for (String arg : args) if ("clear".equalsIgnoreCase(arg)) clear = true;
+        boolean clear = false, over = false, clearOnly = false;
+        for (String arg : args) {
+            if ("clear".equalsIgnoreCase(arg)) clear = true;
+            // take the old track out and stop there. Laying a line in two commands needs this: clearing reaches a
+            // little past the stretch it is given, and would eat into track the other command has just laid
+            if ("clearonly".equalsIgnoreCase(arg)) clear = clearOnly = true;
+            // for a crossover: let a piece be laid through track that is already there, the way a turnout shares
+            // ground with the line it leaves
+            if ("over".equalsIgnoreCase(arg)) over = true;
+        }
 
         Map<String, List<double[][]>> lines;
         try {
@@ -158,10 +166,11 @@ public class CommandMeshImporter extends CommandBase {
             int removed = MeshRailLayer.clear(player.getServerWorld(), along, 3);
             MeshServer.msg(sender, TextFormatting.GRAY + "Removed " + removed + " blocks of old track along the line");
         }
+        if (clearOnly) return;
         MeshServer.msg(sender, TextFormatting.GRAY + "Blueprint: " + MeshRailLayer.describe(blueprint));
         MeshServer.msg(sender, TextFormatting.GRAY + String.format("%.0f blocks of line in %d pieces of %.0f to %.0f blocks, never over %.0f cm off the line",
             total, pieces.size(), shortestPiece, longestPiece, tolerance * 100));
-        m.layRails(player, blueprint, pieces, 0, 2, args[2] + " of " + file.getName());
+        m.layRails(player, blueprint, pieces, 0, over, 2, args[2] + " of " + file.getName());
     }
 
     @Override

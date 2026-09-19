@@ -27,15 +27,23 @@ public final class MeshRailLayer {
     private static Constructor<?> umcStack, umcPlayer, umcVec3d, umcVec3i, placementInfo, railInfo;
     private static Method settingsFrom, withSettings, build, getBuilder, canBuild, umcWorldGet;
     private static Object trackCustom, directionNone;
-    private static Field mType, mLength, mCurvosity, mPreview;
+    private static Field mType, mLength, mCurvosity, mPreview, overrideFlexible;
     /** The first few pieces that were refused, for the log: without them a refusal is silent. */
     private static int complained;
 
     private MeshRailLayer() {}
 
-    /** The track laid, as {laid, refused}; the sender gets the reason for the first refusal in the log. */
+    /**
+     * The track laid, as {laid, refused}; the sender gets the reason for the first refusal in the log.
+     *
+     * <p>With {@code over}, a piece may be laid through track that is already there. Immersive Railroading allows
+     * this of its own accord: a piece is one anchor block and a crowd of gag blocks around it, and a gag always
+     * gives way to a builder that asks. Only the anchor is held. That is the one way two routes can share ground
+     * the way they do at a turnout, and without it a crossover cannot be laid at all - the tracks it joins are
+     * five blocks apart and a track reserves four, so every part of the connection falls inside one or the other.
+     */
     public static int[] lay(EntityPlayerMP player, ItemStack blueprint, List<double[][]> pieces, double curvosity,
-        int from, int count) {
+        boolean over, int from, int count) {
         if (!lookup()) return new int[] { 0, 0 };
         int laid = 0, refused = 0;
         try {
@@ -79,7 +87,9 @@ public final class MeshRailLayer {
                 for (double t = 0; t <= 1.0001; t += 8.0 / Math.max(8, chord))
                     player.getServerWorld().getChunk(new BlockPos(a[0] + (b[0] - a[0]) * t, a[1], a[2] + (b[2] - a[2]) * t));
                 Object world = umcWorldGet.invoke(null, player.getServerWorld());
+                // the builder is kept by position, so the one asked here is the one that does the building
                 Object builder = getBuilder.invoke(info, world, pos);
+                if (over) overrideFlexible.setBoolean(builder, true);
                 if (!Boolean.TRUE.equals(canBuild.invoke(builder))) {
                     refused++;
                     if (complained++ < 5)
@@ -145,6 +155,7 @@ public final class MeshRailLayer {
             umcWorldGet = cWorld.getMethod("get", net.minecraft.world.World.class);
             getBuilder = cInfo.getMethod("getBuilder", cWorld, cVec3i);
             canBuild = cBuilder.getMethod("canBuild");
+            overrideFlexible = cBuilder.getField("overrideFlexible");
             umcStack = cStack.getConstructor(net.minecraft.item.ItemStack.class);
             umcPlayer = cPlayer.getConstructor(net.minecraft.entity.player.EntityPlayer.class);
             umcVec3d = cVec3d.getConstructor(double.class, double.class, double.class);
