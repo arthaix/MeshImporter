@@ -20,6 +20,7 @@ import java.util.regex.Pattern;
 import javax.imageio.ImageIO;
 
 import ru.arthaix.meshimporter.MeshImporter;
+import ru.arthaix.meshimporter.MeshImporterConfig;
 import ru.arthaix.meshimporter.common.MaterialSetup;
 import ru.arthaix.meshimporter.common.Transform;
 import ru.arthaix.meshimporter.instance.MeshInstance;
@@ -40,7 +41,7 @@ import ru.arthaix.meshimporter.model.MeshModelCodec;
  */
 public final class WebExporter {
 
-    public static final int FORMAT = 6;
+    public static final int FORMAT = 7;
     private static final int MAGIC = 0x3157494D; // "MIW1"
     private static final Pattern MODEL_FILE = Pattern.compile("[0-9a-f]{40}(\\.bin|\\.geo\\.json|\\.mat|-lp\\.png|-ln\\.png|-lw\\.png)");
     private static final Pattern TEXTURE_FILE = Pattern.compile("[a-z0-9_]+-[0-9a-f]{8}\\.png");
@@ -117,6 +118,7 @@ public final class WebExporter {
         StringBuilder k = new StringBuilder();
         k.append(FORMAT).append('|').append(budget).append('|').append(in.hash).append('|').append(in.anchorX).append(',').append(in.anchorY).append(',').append(in.anchorZ);
         for (double d : in.matrix) k.append('|').append(Double.doubleToLongBits(d));
+        k.append('|').append(MeshImporterConfig.webCell);
         k.append('|').append(LightBake.rayLength).append(',').append(LightBake.glassTransmission).append(',').append(LightBake.bounceStrength);
         return MeshModelCodec.sha1(k.toString().getBytes(StandardCharsets.UTF_8));
     }
@@ -146,7 +148,7 @@ public final class WebExporter {
             split[i] = model.materials[i].mode == MaterialSetup.Mode.BLOCK;
             translucentMat[i] = translucent(model.materials[i]);
         }
-        WebMesh mesh = WebProxy.build(local, model, split, budget);
+        WebMesh mesh = WebProxy.build(local, model, split, budget, MeshImporterConfig.webCell);
         if (mesh == null) throw new IOException("model could not be simplified");
         long t1 = System.currentTimeMillis();
 

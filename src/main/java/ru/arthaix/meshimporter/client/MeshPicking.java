@@ -103,15 +103,25 @@ public final class MeshPicking {
         if (result == EnumActionResult.SUCCESS) mc.player.swingArm(hand);
     }
 
-    /** Every frame, after Minecraft updated its aim: move it onto the mesh for LittleTiles' preview and outline. */
+    /**
+     * Every frame, after Minecraft updated its aim: move it onto the mesh surface. Everything that asks Minecraft what
+     * the player looks at then sees the mesh - LittleTiles shows its preview there, Immersive Railroading draws the
+     * ghost of the track it would lay (UniversalModCore calls renderMouseover with exactly this aim), and Minecraft
+     * outlines the cell. Without it all of them look at whatever stands behind the model.
+     */
     @SubscribeEvent
     public void onCameraSetup(EntityViewRenderEvent.CameraSetup event) {
         Minecraft mc = Minecraft.getMinecraft();
-        if (mc.player == null || mc.world == null || mc.player.isSpectator() || !holdsLittleTool(mc)) {
+        if (mc.player == null || mc.world == null || mc.player.isSpectator()) {
             clearAim();
             return;
         }
-        aimAtMesh(mc, (float) event.getRenderPartialTicks(), true);
+        boolean little = holdsLittleTool(mc);
+        if (!little && mc.player.getHeldItemMainhand().isEmpty() && mc.player.getHeldItemOffhand().isEmpty()) {
+            clearAim();
+            return;
+        }
+        aimAtMesh(mc, (float) event.getRenderPartialTicks(), little);
     }
 
     /**
@@ -233,7 +243,23 @@ public final class MeshPicking {
         GlStateManager.glLineWidth(2f);
         GlStateManager.disableTexture2D();
         GlStateManager.depthMask(false);
-        if (t != null) RenderGlobal.drawSelectionBoundingBox(new AxisAlignedBB(t.pos).grow(0.002).offset(-px, -py, -pz), 0f, 0f, 0f, 0.4f);
+        if (t != null) {
+            // The cell the item in hand would act on. Minecraft draws no outline on a mesh - it sees no block there -
+            // and a dark line is lost on dark stone, so it goes on thick and black first, then bright on top.
+            AxisAlignedBB cell = new AxisAlignedBB(t.pos).grow(0.002).offset(-px, -py, -pz);
+            GlStateManager.glLineWidth(4f);
+            RenderGlobal.drawSelectionBoundingBox(cell, 0f, 0f, 0f, 0.5f);
+            GlStateManager.glLineWidth(2f);
+            RenderGlobal.drawSelectionBoundingBox(cell, 0f, 0.85f, 0.95f, 0.95f);
+            // the face looked at, so it is clear which way up the cell sits
+            double in = 0.004;
+            AxisAlignedBB face = t.facing.getAxis() == EnumFacing.Axis.Y
+                ? cell.grow(-in, -0.5 + in, -in).offset(0, t.facing == EnumFacing.UP ? 0.5 - in : -0.5 + in, 0)
+                : t.facing.getAxis() == EnumFacing.Axis.X
+                    ? cell.grow(-0.5 + in, -in, -in).offset(t.facing == EnumFacing.EAST ? 0.5 - in : -0.5 + in, 0, 0)
+                    : cell.grow(-in, -in, -0.5 + in).offset(0, 0, t.facing == EnumFacing.SOUTH ? 0.5 - in : -0.5 + in);
+            RenderGlobal.drawSelectionBoundingBox(face, 1f, 1f, 1f, 0.35f);
+        }
         if (pb != null) RenderGlobal.drawSelectionBoundingBox(new AxisAlignedBB(pb[0], pb[1], pb[2], pb[3], pb[4], pb[5]).offset(-px, -py, -pz), 1f, 0.9f, 0.2f, 0.8f);
         GlStateManager.depthMask(true);
         GlStateManager.enableTexture2D();

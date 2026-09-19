@@ -68,6 +68,8 @@ public class MeshJourneyMap implements IClientPlugin, MeshMapOverlays {
         try {
             api.show(overlay);
             shown.put(instance.id, overlay);
+            MeshImporter.logger.info("JourneyMap took model #" + instance.id + ": " + northWest.getX() + "," + northWest.getZ()
+                + " to " + southEast.getX() + "," + southEast.getZ() + " in dimension " + instance.dim);
         } catch (Exception e) {
             MeshImporter.logger.warn("JourneyMap did not take model #" + instance.id + ": " + e);
         }

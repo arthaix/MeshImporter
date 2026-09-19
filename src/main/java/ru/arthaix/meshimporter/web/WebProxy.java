@@ -32,11 +32,13 @@ public final class WebProxy {
 
     private WebProxy() {}
 
-    public static WebMesh build(float[] local, MeshModel model, boolean[] splitFaces, int budget) {
+    /**
+     * @param cell  the grid the copy should be built on, in blocks: everything thinner than that is lost, so a rail
+     *              line on an embankment needs about a block. Coarser only when the triangle ceiling forces it.
+     * @param budget the most triangles one copy may have.
+     */
+    public static WebMesh build(float[] local, MeshModel model, boolean[] splitFaces, int budget, double cell) {
         double[] b = bounds(local, model.vertexCount);
-        double ex = b[3] - b[0], ey = b[4] - b[1], ez = b[5] - b[2];
-        double area = 2.4 * (ex * ey + ey * ez + ex * ez) + 1;
-        double s = Math.max(0.25, Math.sqrt(2 * area / Math.max(1000, budget)));
         int[] idx = model.indices;
         float[] tris = new float[9 * model.triangleCount];
         int[] triMat = new int[model.triangleCount];
@@ -46,22 +48,31 @@ public final class WebProxy {
                 for (int c = 0; c < 3; c++) System.arraycopy(local, 3 * idx[3 * t + c], tris, 9 * t + 3 * c, 3);
             }
         TriangleGrid grid = new TriangleGrid(tris, model.triangleCount, 0, 0, 0);
+        double s = Math.max(0.25, cell);
         WebMesh best = null, last = null;
-        int refinements = 0;
-        for (int attempt = 0; attempt < 8; attempt++) {
+        // the asked grid, made coarser only while the copy does not fit under the ceiling
+        for (int attempt = 0; attempt < 6; attempt++) {
             WebMesh m = attempt(local, model, splitFaces, b, s, grid, triMat);
             if (m != null) last = m;
             if (m != null && m.triangleCount() <= budget) {
-                if (best == null || m.triangleCount() > best.triangleCount()) best = m;
-                if (m.triangleCount() >= 0.6 * budget || refinements++ >= 2 || s <= 0.25) break;
-                s = Math.max(0.25, s / Math.min(2.0, Math.sqrt((double) budget / Math.max(1, m.triangleCount())) * 0.95));
-                continue;
+                best = m;
+                break;
             }
-            if (best != null) break;
-            double ratio = m == null ? 4 : (double) m.triangleCount() / budget;
-            s *= Math.max(1.1, Math.sqrt(ratio) * 1.05);
+            double ratio = m == null ? 4 : (double) m.triangleCount() / Math.max(1, budget);
+            s *= Math.max(1.15, Math.sqrt(ratio) * 1.05);
         }
-        return best != null ? best : last;
+        if (best == null) return last;
+        // a small model has room to spare: make the grid finer while the copy stays cheap. The ceiling itself is for
+        // models that need the asked grid to keep their shape, not for spending it on a compact one.
+        int cheap = Math.max(1000, budget / 4);
+        for (int attempt = 0; attempt < 3 && s > 0.25 && best.triangleCount() <= cheap; attempt++) {
+            double finer = Math.max(0.25, s / 1.6);
+            WebMesh m = attempt(local, model, splitFaces, b, finer, grid, triMat);
+            if (m == null || m.triangleCount() > cheap) break;
+            best = m;
+            s = finer;
+        }
+        return best;
     }
 
     private static WebMesh attempt(float[] p, MeshModel model, boolean[] split, double[] b, double s, TriangleGrid grid, int[] triMat) {

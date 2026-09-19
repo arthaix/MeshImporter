@@ -189,6 +189,12 @@ public final class ClientMeshes {
             return;
         }
         if (image == null) return;
+        int painted = 0;
+        for (int y = 0; y < image.getHeight(); y++)
+            for (int x = 0; x < image.getWidth(); x++)
+                if ((image.getRGB(x, y) >>> 24) > 8) painted++;
+        MeshImporter.logger.info("Map picture of model #" + li.instance.id + ": " + image.getWidth() + "x" + image.getHeight()
+            + ", " + painted + " painted pixels");
         Minecraft.getMinecraft().addScheduledTask(() -> {
             if (known.get(li.instance.id) != li.instance) return;
             snapshots.put(li.instance.id, image);
