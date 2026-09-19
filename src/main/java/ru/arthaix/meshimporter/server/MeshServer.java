@@ -449,7 +449,6 @@ public final class MeshServer {
         });
     }
 
-    @SubscribeEvent
     /** One line above the hotbar, at most one every two seconds, so a held-down click cannot flood the player. */
     private void tell(EntityPlayerMP player, String text) {
         long now = player.getServerWorld().getTotalWorldTime();
@@ -459,6 +458,7 @@ public final class MeshServer {
         player.sendStatusMessage(new TextComponentString(TextFormatting.GRAY + "MeshImporter: " + text), true);
     }
 
+    @SubscribeEvent
     public void onServerTick(TickEvent.ServerTickEvent event) {
         if (event.phase != TickEvent.Phase.END) return;
         // every five minutes: the rails a mesh once carried, whose rail is gone by now, are forgotten
