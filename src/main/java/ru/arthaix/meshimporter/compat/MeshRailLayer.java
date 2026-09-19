@@ -34,20 +34,19 @@ public final class MeshRailLayer {
     private MeshRailLayer() {}
 
     /** The track laid, as {laid, refused}; the sender gets the reason for the first refusal in the log. */
-    public static int[] lay(EntityPlayerMP player, ItemStack blueprint, List<double[]> points, double curvosity,
+    public static int[] lay(EntityPlayerMP player, ItemStack blueprint, List<double[][]> pieces, double curvosity,
         int from, int count) {
         if (!lookup()) return new int[] { 0, 0 };
         int laid = 0, refused = 0;
         try {
             Object stack = umcStack.newInstance(blueprint);
             Object who = umcPlayer.newInstance(player);
-            for (int i = from; i + 1 < points.size() && i < from + count; i++) {
-                double[] a = points.get(i), b = points.get(i + 1);
-                double[] before = i > 0 ? points.get(i - 1) : a;
-                double[] after = i + 2 < points.size() ? points.get(i + 2) : b;
+            for (int i = from; i < pieces.size() && i < from + count; i++) {
+                double[][] piece = pieces.get(i);
+                double[] a = piece[0], b = piece[1];
                 // the heading of the line at each end, so neighbouring pieces meet without a kink
-                float yawA = RailPaths.yaw(before, b);
-                float yawB = RailPaths.yaw(a, after);
+                float yawA = (float) piece[2][0];
+                float yawB = (float) piece[2][1];
                 double chord = RailPaths.distance(a, b);
                 int length = Math.max(1, (int) Math.ceil(chord));
 
@@ -59,9 +58,9 @@ public final class MeshRailLayer {
                 double bx = Math.floor(a[0]), by = Math.floor(a[1]), bz = Math.floor(a[2]);
                 double[] ra = { a[0] - bx, a[1] - by, a[2] - bz };
                 double[] rb = { b[0] - bx, b[1] - by, b[2] - bz };
-                double arm = chord / 3;
-                double[] ca = { ra[0] - Math.sin(Math.toRadians(yawA)) * arm, ra[1] + (rb[1] - ra[1]) / 3, ra[2] + Math.cos(Math.toRadians(yawA)) * arm };
-                double[] cb = { rb[0] + Math.sin(Math.toRadians(yawB)) * arm, rb[1] - (rb[1] - ra[1]) / 3, rb[2] - Math.cos(Math.toRadians(yawB)) * arm };
+                double arm = chord / 3, rise = (rb[1] - ra[1]) / 3;
+                double[] ca = RailPaths.control(ra, yawA, arm, rise);
+                double[] cb = RailPaths.control(rb, yawB + 180, arm, -rise);
                 Object start = placementInfo.newInstance(vec3d(ra), directionNone, yawA, vec3d(ca));
                 Object end = placementInfo.newInstance(vec3d(rb), directionNone, yawB, vec3d(cb));
                 Object info = railInfo.newInstance(stack, start, end);
@@ -77,8 +76,8 @@ public final class MeshRailLayer {
                 });
                 Object pos = umcVec3i.newInstance(bx, by, bz);
                 // the ground has to be there to be asked about: a piece 300 blocks away is in no loaded chunk
-                player.getServerWorld().getChunk(new BlockPos(a[0], a[1], a[2]));
-                player.getServerWorld().getChunk(new BlockPos(b[0], b[1], b[2]));
+                for (double t = 0; t <= 1.0001; t += 8.0 / Math.max(8, chord))
+                    player.getServerWorld().getChunk(new BlockPos(a[0] + (b[0] - a[0]) * t, a[1], a[2] + (b[2] - a[2]) * t));
                 Object world = umcWorldGet.invoke(null, player.getServerWorld());
                 Object builder = getBuilder.invoke(info, world, pos);
                 if (!Boolean.TRUE.equals(canBuild.invoke(builder))) {

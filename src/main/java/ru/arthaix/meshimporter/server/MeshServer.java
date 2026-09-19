@@ -540,23 +540,23 @@ public final class MeshServer {
     private static final class RailJob {
         UUID player;
         ItemStack blueprint;
-        List<double[]> points;
+        List<double[][]> pieces;
         double curvosity;
         int perTick, at, laid, refused, told;
         String name;
     }
 
     /** Starts laying track along a line; the pieces go in over the following ticks. */
-    public void layRails(EntityPlayerMP player, ItemStack blueprint, List<double[]> points, double curvosity, int perTick, String name) {
+    public void layRails(EntityPlayerMP player, ItemStack blueprint, List<double[][]> pieces, double curvosity, int perTick, String name) {
         RailJob job = new RailJob();
         job.player = player.getUniqueID();
         job.blueprint = blueprint.copy();
-        job.points = points;
+        job.pieces = pieces;
         job.curvosity = curvosity;
         job.perTick = Math.max(1, perTick);
         job.name = name;
         railJob = job;
-        chat(player, TextFormatting.GRAY + "Laying " + (points.size() - 1) + " pieces of track along " + name + "...");
+        chat(player, TextFormatting.GRAY + "Laying " + pieces.size() + " pieces of track along " + name + "...");
     }
 
     public boolean layingRails() {
@@ -578,11 +578,11 @@ public final class MeshServer {
             railJob = null;
             return;
         }
-        int[] done = MeshRailLayer.lay(player, job.blueprint, job.points, job.curvosity, job.at, job.perTick);
+        int[] done = MeshRailLayer.lay(player, job.blueprint, job.pieces, job.curvosity, job.at, job.perTick);
         job.laid += done[0];
         job.refused += done[1];
         job.at += job.perTick;
-        int total = job.points.size() - 1;
+        int total = job.pieces.size();
         if (job.at < total) {
             int percent = 100 * job.at / Math.max(1, total);
             if (percent >= job.told + 10) {

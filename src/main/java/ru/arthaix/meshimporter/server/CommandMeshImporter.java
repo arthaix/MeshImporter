@@ -83,7 +83,7 @@ public class CommandMeshImporter extends CommandBase {
             m.stopLayingRails(sender);
             return;
         }
-        if (args.length < 4) throw new CommandException("/meshimporter rails <file> <line|all> <model> [step] [clear] [from-to]");
+        if (args.length < 4) throw new CommandException("/meshimporter rails <file> <line|all> <model> [longest piece] [tolerance] [clear] [from-to]");
         if (m.layingRails()) throw new CommandException("Track is already being laid; /meshimporter rails stop");
         EntityPlayerMP player = getCommandSenderAsPlayer(sender);
         ItemStack blueprint = player.getHeldItemMainhand();
@@ -93,8 +93,14 @@ public class CommandMeshImporter extends CommandBase {
         if (!file.isFile()) throw new CommandException("No line file " + file.getPath());
         MeshInstance in = m.registry() == null ? null : m.registry().find(parseInt(args[3], 1));
         if (in == null) throw new CommandException("No model #" + args[3]);
-        double step = args.length > 4 ? parseDouble(args[4], 2, 64) : 16;
-        boolean clear = args.length > 5 && "clear".equalsIgnoreCase(args[5]);
+        // how long a piece may grow, and how far it may ever stray from the drawn line
+        double longest = 200, tolerance = 0.01;
+        for (int i = 4; i < args.length; i++) {
+            if (args[i].matches("[0-9]+")) longest = parseDouble(args[i], 8, 400);
+            else if (args[i].matches("0[.][0-9]+")) tolerance = parseDouble(args[i], 0.001, 1);
+        }
+        boolean clear = false;
+        for (String arg : args) if ("clear".equalsIgnoreCase(arg)) clear = true;
 
         Map<String, List<double[][]>> lines;
         try {
@@ -102,41 +108,59 @@ public class CommandMeshImporter extends CommandBase {
         } catch (IOException e) {
             throw new CommandException("Cannot read " + file.getName() + ": " + e.getMessage());
         }
-        List<double[]> points = new ArrayList<>();
+        // an optional stretch along the line, in blocks: "0-300" lays the first 300 blocks, for a look before the rest
+        double from = 0, to = Double.MAX_VALUE;
+        String range = null;
+        for (int i = 4; i < args.length; i++) {
+            if (!args[i].matches("[0-9]+-[0-9]+")) continue;
+            range = args[i];
+            String[] parts = range.split("-");
+            from = Double.parseDouble(parts[0]);
+            to = Double.parseDouble(parts[1]);
+        }
+
+        List<double[][]> pieces = new ArrayList<>();
+        List<double[]> along = new ArrayList<>();
         int used = 0;
+        double total = 0, longestPiece = 0, shortestPiece = Double.MAX_VALUE;
         for (Map.Entry<String, List<double[][]>> e : lines.entrySet()) {
             if (!"all".equalsIgnoreCase(args[2]) && !e.getKey().equalsIgnoreCase(args[2])) continue;
             used++;
             for (double[][] line : e.getValue())
-                for (double[][] run : RailPaths.split(RailPaths.toWorld(line, in), 32))
-                    points.addAll(RailPaths.resample(run, step));
+                for (double[][] run : RailPaths.split(RailPaths.toWorld(line, in), 32)) {
+                    double[][] wanted = run;
+                    if (range != null) {
+                        List<double[]> cut = new ArrayList<>();
+                        double walked = 0;
+                        for (int i = 0; i < run.length; i++) {
+                            if (i > 0) walked += RailPaths.distance(run[i - 1], run[i]);
+                            if (walked >= from && walked <= to) cut.add(run[i]);
+                        }
+                        if (cut.size() < 2) continue;
+                        wanted = cut.toArray(new double[0][]);
+                    }
+                    for (double[][] piece : RailPaths.pieces(wanted, tolerance, longest)) {
+                        pieces.add(piece);
+                        double length = RailPaths.distance(piece[0], piece[1]);
+                        total += length;
+                        longestPiece = Math.max(longestPiece, length);
+                        shortestPiece = Math.min(shortestPiece, length);
+                        along.add(piece[0]);
+                        along.add(piece[1]);
+                    }
+                }
         }
         if (used == 0) throw new CommandException("No line called " + args[2] + " in " + file.getName() + " (it holds: " + String.join(", ", lines.keySet()) + ")");
-        if (points.size() < 2) throw new CommandException("That line has no length");
-
-        // an optional stretch along the line, in blocks: "0-300" lays the first 300 blocks, for a look before the rest
-        String range = null;
-            for (int i = 4; i < args.length; i++) if (args[i].matches("[0-9]+-[0-9]+")) range = args[i];
-        if (range != null) {
-            String[] parts = range.split("-");
-            double from = Double.parseDouble(parts[0]), to = Double.parseDouble(parts[1]);
-            List<double[]> cut = new ArrayList<>();
-            double along = 0;
-            for (int i = 0; i < points.size(); i++) {
-                if (i > 0) along += RailPaths.distance(points.get(i - 1), points.get(i));
-                if (along >= from && along <= to) cut.add(points.get(i));
-            }
-            if (cut.size() < 2) throw new CommandException("Nothing of the line lies between " + from + " and " + to);
-            points = cut;
-            MeshServer.msg(sender, TextFormatting.GRAY + "Only the stretch " + range + " blocks along the line");
-        }
+        if (pieces.isEmpty()) throw new CommandException("Nothing of that line to lay");
 
         if (clear) {
-            int removed = MeshRailLayer.clear(player.getServerWorld(), points, 3);
+            int removed = MeshRailLayer.clear(player.getServerWorld(), along, 3);
             MeshServer.msg(sender, TextFormatting.GRAY + "Removed " + removed + " blocks of old track along the line");
         }
         MeshServer.msg(sender, TextFormatting.GRAY + "Blueprint: " + MeshRailLayer.describe(blueprint));
-        m.layRails(player, blueprint, points, 1.0 / 6, 4, args[2] + " of " + file.getName());
+        MeshServer.msg(sender, TextFormatting.GRAY + String.format("%.0f blocks of line in %d pieces of %.0f to %.0f blocks, never over %.0f cm off the line",
+            total, pieces.size(), shortestPiece, longestPiece, tolerance * 100));
+        m.layRails(player, blueprint, pieces, 0, 2, args[2] + " of " + file.getName());
     }
 
     @Override
