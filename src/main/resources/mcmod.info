@@ -1,0 +1,16 @@
+[
+{
+  "modid": "meshimporter",
+  "name": "MeshImporter",
+  "description": "Puts 3D models (.obj) into Minecraft as real meshes: no voxels, no tiles. Models are lit by the world, solid for players and mobs, drawn with a block texture, a colour or their own texture per material, and streamed from the server to every client.",
+  "version": "${version}",
+  "mcversion": "${mcversion}",
+  "url": "",
+  "updateUrl": "",
+  "authorList": ["Aleksei Usenko (arthaix)"],
+  "credits": "",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}
+]

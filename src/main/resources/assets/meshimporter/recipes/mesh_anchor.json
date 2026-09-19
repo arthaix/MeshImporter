@@ -1,0 +1,14 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    " C ",
+    "GIG",
+    "III"
+  ],
+  "key": {
+    "C": { "item": "minecraft:compass" },
+    "G": { "item": "minecraft:glass_pane" },
+    "I": { "item": "minecraft:iron_ingot" }
+  },
+  "result": { "item": "meshimporter:mesh_anchor" }
+}

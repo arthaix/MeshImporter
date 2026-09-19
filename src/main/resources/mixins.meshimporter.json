@@ -1,0 +1,9 @@
+{
+  "package": "ru.arthaix.meshimporter.mixin",
+  "minVersion": "0.8",
+  "compatibilityLevel": "JAVA_8",
+  "required": false,
+  "setSourceFile": true,
+  "client": [ "MixinLittlePlacementHelper" ],
+  "mixins": [ "MixinRailroadTrack" ]
+}

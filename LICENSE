@@ -1,0 +1,43 @@
+MeshImporter License
+
+Copyright (c) 2026 Aleksei Usenko (arthaix). All rights reserved.
+
+1. Definitions
+   "Software" means MeshImporter: its source code, compiled binaries, resources,
+   documentation and any part of them.
+   "Author" means Aleksei Usenko (arthaix).
+
+2. Permitted use
+   You may download and run the unmodified compiled Software (the released
+   .jar file) on your own Minecraft clients and servers, including servers
+   with other players, free of charge.
+
+3. Restrictions
+   Except with the prior written permission of the Author, you may NOT:
+   a) modify, translate, adapt, decompile, reverse-engineer or create
+      derivative works of the Software or any part of it;
+   b) copy, publish, redistribute, sell, rent, sublicense or otherwise make
+      the Software or any part of it available to third parties, in original
+      or modified form, including as part of modpacks or other collections;
+   c) remove or alter copyright notices, the mod name or the author's name;
+   d) use the source code, in whole or in part, in any other project.
+
+4. Source availability
+   The source code is published for reference and review only. Reading it
+   does not grant any of the rights withheld in section 3.
+
+5. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM THE
+   SOFTWARE OR ITS USE.
+
+6. Termination
+   Any breach of section 3 terminates your rights under this license
+   automatically.
+
+7. Third-party software
+   The Software requires Minecraft Forge, CreativeCore and LittleTiles, which
+   are separate works under their own licenses and are not covered by this
+   license.

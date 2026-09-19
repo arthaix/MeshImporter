@@ -1,0 +1,26 @@
+# build
+build/
+.gradle/
+out/
+bin/
+*.class
+
+# dev environment
+run/
+localmaven/
+testmodels/
+
+# IDE
+.idea/
+*.iml
+.settings/
+.classpath
+.project
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# third-party jars used only to compile against
+libs/
