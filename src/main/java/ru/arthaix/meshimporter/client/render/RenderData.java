@@ -124,6 +124,8 @@ public final class RenderData {
     private Cell[] cells = new Cell[0];
     /** Mesh sky light per model vertex, 0..240, for drawing without the shader; null = none baked. */
     private byte[] vertexSky;
+    /** Under a pack: mesh sky light of the back side of every vertex (normal reversed). */
+    private byte[] vertexSkyBack;
     private boolean shaded;
     /** Built for an OptiFine shader pack: it does its own directional shading, so ours stays out of the colour. */
     private boolean pack;
@@ -273,7 +275,8 @@ public final class RenderData {
             try {
                 bake = new LightBake(loc, idx, tris, translucent, threads);
                 MeshImporter.logger.info("Model #" + li.instance.id + ": light baked in " + bake.millis + " ms (" + bake.sampleCells + " cells, " + bake.raysCast + " rays, " + threads + " threads)");
-                if (!shaded) vertexSky = sampleVertices(bake);
+                if (!shaded) vertexSky = sampleVertices(bake, 1);
+                if (pack) vertexSkyBack = sampleVertices(bake, -1);
             } catch (RuntimeException | OutOfMemoryError e) {
                 bake = null;
                 MeshImporter.logger.warn("No baked light for model #" + li.instance.id + ": " + e);
@@ -339,7 +342,7 @@ public final class RenderData {
             if (shaded) texelBytes += volume(cell, bake);
             for (int g = 0; g < groupCount; g++) {
                 if (cell.groupCount[g] == 0) continue;
-                ByteBuffer buf = ByteBuffer.allocateDirect(cell.groupCount[g] * VERTEX_BYTES).order(ByteOrder.nativeOrder());
+                ByteBuffer buf = ByteBuffer.allocateDirect(bufferVertices(cell, g) * VERTEX_BYTES).order(ByteOrder.nativeOrder());
                 fill(cell, g, buf);
                 buf.flip();
                 cell.pending[g] = buf;
@@ -424,7 +427,12 @@ public final class RenderData {
         return (a + b - 1) / b;
     }
 
-    private byte[] sampleVertices(LightBake bake) {
+    /** Vertices a group's buffer holds: under a pack every triangle is there twice, once per side. */
+    private int bufferVertices(Cell c, int g) {
+        return (pack ? 2 : 1) * c.groupCount[g];
+    }
+
+    private byte[] sampleVertices(LightBake bake, int side) {
         int n = li.model.vertexCount;
         byte[] result = new byte[n];
         float[] loc = li.local;
@@ -436,7 +444,7 @@ public final class RenderData {
             while (!disposed && (from = next.getAndAdd(8192)) < n) {
                 int to = Math.min(n, from + 8192);
                 for (int v = from; v < to; v++) {
-                    float vis = bake.sample(loc[3 * v], loc[3 * v + 1], loc[3 * v + 2], nrm[3 * v] / 127.0, nrm[3 * v + 1] / 127.0, nrm[3 * v + 2] / 127.0);
+                    float vis = bake.sample(loc[3 * v], loc[3 * v + 1], loc[3 * v + 2], side * nrm[3 * v] / 127.0, side * nrm[3 * v + 1] / 127.0, side * nrm[3 * v + 2] / 127.0);
                     result[v] = (byte) Math.round(16 * (pack ? packLevel(vis) : LightBake.levelOf(vis, 0)));
                 }
             }
@@ -468,59 +476,90 @@ public final class RenderData {
         return LightBake.levelOf(visibility * 8, 0);
     }
 
+    /**
+     * Writes the vertices of a group. Under a shader pack every triangle goes in twice, once per side, each wound so
+     * that it faces where its normal points and drawn with back faces culled: the pack lights by gl_Normal, and a
+     * model exported with some faces wound the other way (a fifth of the area of a housing block, pavements almost
+     * entirely) was lit from behind - self-shadowed wherever the pack had a shadow map, lit beyond it.
+     */
     private void fill(Cell c, int g, ByteBuffer buf) {
         Group gr = groups[g];
+        float[] loc = li.local;
+        byte[] nrm = li.normals;
+        int s = c.groupStart[g], e = s + c.groupCount[g];
+        if (!pack) {
+            for (int k = s; k < e; k++) vertex(c, gr, k, 1, buf);
+            return;
+        }
+        for (int k = s; k < e; k += 3) {
+            int a = c.corners[k], b = c.corners[k + 1], d = c.corners[k + 2];
+            double e1x = loc[3 * b] - loc[3 * a], e1y = loc[3 * b + 1] - loc[3 * a + 1], e1z = loc[3 * b + 2] - loc[3 * a + 2];
+            double e2x = loc[3 * d] - loc[3 * a], e2y = loc[3 * d + 1] - loc[3 * a + 1], e2z = loc[3 * d + 2] - loc[3 * a + 2];
+            double facing = (e1y * e2z - e1z * e2y) * nrm[3 * a] + (e1z * e2x - e1x * e2z) * nrm[3 * a + 1] + (e1x * e2y - e1y * e2x) * nrm[3 * a + 2];
+            // counter-clockwise seen from the side the normal points to is the front
+            boolean ccw = facing >= 0;
+            vertex(c, gr, k, 1, buf);
+            vertex(c, gr, ccw ? k + 1 : k + 2, 1, buf);
+            vertex(c, gr, ccw ? k + 2 : k + 1, 1, buf);
+            vertex(c, gr, k, -1, buf);
+            vertex(c, gr, ccw ? k + 2 : k + 1, -1, buf);
+            vertex(c, gr, ccw ? k + 1 : k + 2, -1, buf);
+        }
+    }
+
+    private void vertex(Cell c, Group gr, int k, int side, ByteBuffer buf) {
         float[] loc = li.local;
         byte[] nrm = li.normals;
         float[] uv = li.model.uvs;
         int floor = MeshImporterConfig.shadowLevel * 16;
         int a = (gr.color >>> 24) & 255, r = (gr.color >> 16) & 255, gg = (gr.color >> 8) & 255, b = gr.color & 255;
-        int s = c.groupStart[g], e = s + c.groupCount[g];
-        for (int k = s; k < e; k++) {
-            int v = c.corners[k];
-            float x = loc[3 * v], y = loc[3 * v + 1], z = loc[3 * v + 2];
-            buf.putFloat(x).putFloat(y).putFloat(z);
-            float shade = 1f;
-            if (!gr.glow && !pack) {
-                float nx = nrm[3 * v] / 127f, ny = nrm[3 * v + 1] / 127f, nz = nrm[3 * v + 2] / 127f;
-                shade = Math.min(1f, nx * nx * 0.6f + nz * nz * 0.8f + ny * ny * (ny > 0 ? 1f : 0.5f));
-            }
-            // under a pack the vertex alpha of see-through surfaces is read as ambient occlusion, not opacity
-            buf.put((byte) (int) (r * shade)).put((byte) (int) (gg * shade)).put((byte) (int) (b * shade)).put((byte) (pack && gr.translucent ? 255 : a));
-            float u = 0, w = 0;
-            if (gr.worldUv) {
-                switch (gr.face) {
-                    case 0:
-                    case 1:
-                        u = x + ux;
-                        w = z + uz;
-                        break;
-                    case 2:
-                    case 3:
-                        u = x + ux;
-                        w = -(y + uy);
-                        break;
-                    default:
-                        u = z + uz;
-                        w = -(y + uy);
-                }
-            } else if (gr.modelUv && uv != null) {
-                u = uv[2 * v];
-                w = uv[2 * v + 1];
-            }
-            buf.putFloat(u).putFloat(w);
-            char l = c.light[k];
-            int sky = l >> 8, block = l & 255;
-            if (gr.glow) {
-                sky = 240;
-                block = 240;
-            } else if (!shaded && vertexSky != null) {
-                sky = Math.min(sky, Math.max(vertexSky[v] & 255, floor));
-            }
-            buf.putShort((short) block).putShort((short) sky);
-            buf.put(nrm[3 * v]).put(nrm[3 * v + 1]).put(nrm[3 * v + 2]).put((byte) 0);
-            tangent(nrm[3 * v], nrm[3 * v + 1], nrm[3 * v + 2], buf);
+        int v = c.corners[k];
+        float x = loc[3 * v], y = loc[3 * v + 1], z = loc[3 * v + 2];
+        buf.putFloat(x).putFloat(y).putFloat(z);
+        float shade = 1f;
+        if (!gr.glow && !pack) {
+            float nx = nrm[3 * v] / 127f, ny = nrm[3 * v + 1] / 127f, nz = nrm[3 * v + 2] / 127f;
+            shade = Math.min(1f, nx * nx * 0.6f + nz * nz * 0.8f + ny * ny * (ny > 0 ? 1f : 0.5f));
         }
+        // under a pack the vertex alpha of see-through surfaces is read as ambient occlusion, not opacity
+        buf.put((byte) (int) (r * shade)).put((byte) (int) (gg * shade)).put((byte) (int) (b * shade)).put((byte) (pack && gr.translucent ? 255 : a));
+        float u = 0, w = 0;
+        if (gr.worldUv) {
+            switch (gr.face) {
+                case 0:
+                case 1:
+                    u = x + ux;
+                    w = z + uz;
+                    break;
+                case 2:
+                case 3:
+                    u = x + ux;
+                    w = -(y + uy);
+                    break;
+                default:
+                    u = z + uz;
+                    w = -(y + uy);
+            }
+        } else if (gr.modelUv && uv != null) {
+            u = uv[2 * v];
+            w = uv[2 * v + 1];
+        }
+        buf.putFloat(u).putFloat(w);
+        char l = c.light[k];
+        int sky = l >> 8, block = l & 255;
+        if (gr.glow) {
+            sky = 240;
+            block = 240;
+        } else if (pack) {
+            byte[] baked = side > 0 ? vertexSky : vertexSkyBack;
+            if (baked != null) sky = Math.min(sky, Math.max(baked[v] & 255, floor));
+        } else if (!shaded && vertexSky != null) {
+            sky = Math.min(sky, Math.max(vertexSky[v] & 255, floor));
+        }
+        buf.putShort((short) block).putShort((short) sky);
+        byte nx = (byte) (side * nrm[3 * v]), ny = (byte) (side * nrm[3 * v + 1]), nz = (byte) (side * nrm[3 * v + 2]);
+        buf.put(nx).put(ny).put(nz).put((byte) 0);
+        tangent(nx, ny, nz, buf);
     }
 
     /** Any unit direction across the normal (the texture has no normal map of its own to line up with), w = +1. */
@@ -825,6 +864,16 @@ public final class RenderData {
                 int x = (int) Math.floor(ax + loc[3 * v] + nrm[3 * v] / 254f);
                 int y = (int) Math.floor(ay + loc[3 * v + 1] + nrm[3 * v + 1] / 254f);
                 int z = (int) Math.floor(az + loc[3 * v + 2] + nrm[3 * v + 2] / 254f);
+                if (pack) {
+                    // both sides share this light: the brighter one, so a face lying on terrain is not blacked out
+                    char front = sideLight(world, mp, ax, ay, az, v, 1), back = sideLight(world, mp, ax, ay, az, v, -1);
+                    char val = (char) ((Math.max(front >> 8, back >> 8) << 8) | Math.max(front & 255, back & 255));
+                    if (c.light[k] != val) {
+                        c.light[k] = val;
+                        changed = true;
+                    }
+                    continue;
+                }
                 if (x != lastX || y != lastY || z != lastZ) {
                     lastX = x;
                     lastY = y;
@@ -849,11 +898,22 @@ public final class RenderData {
         return changed;
     }
 
+    /** World light (sky << 8 | block, both x16) half a block off a vertex to one side of its surface; 0 in terrain. */
+    private char sideLight(World world, BlockPos.MutableBlockPos mp, int ax, int ay, int az, int v, int side) {
+        float[] loc = li.local;
+        byte[] nrm = li.normals;
+        mp.setPos((int) Math.floor(ax + loc[3 * v] + side * nrm[3 * v] / 254f),
+            (int) Math.floor(ay + loc[3 * v + 1] + side * nrm[3 * v + 1] / 254f),
+            (int) Math.floor(az + loc[3 * v + 2] + side * nrm[3 * v + 2] / 254f));
+        if (world.getBlockState(mp).isOpaqueCube()) return 0;
+        return (char) (((world.getLightFor(EnumSkyBlock.SKY, mp) * 16) << 8) | (world.getLightFor(EnumSkyBlock.BLOCK, mp) * 16));
+    }
+
     private void reupload(Cell c) {
         for (int g = 0; g < groups.length; g++) {
             VertexBuffer vb = c.vbo[g];
             if (vb == null) continue;
-            int bytes = c.groupCount[g] * VERTEX_BYTES;
+            int bytes = bufferVertices(c, g) * VERTEX_BYTES;
             if (scratch == null || scratch.capacity() < bytes) scratch = ByteBuffer.allocateDirect(Math.max(bytes, 1 << 20)).order(ByteOrder.nativeOrder());
             scratch.clear();
             fill(c, g, scratch);

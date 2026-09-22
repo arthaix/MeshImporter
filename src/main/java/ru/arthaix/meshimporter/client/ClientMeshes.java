@@ -308,7 +308,13 @@ public final class ClientMeshes {
         if (pack && pass == 1) Shaders.beginPackTranslucent();
 
         mc.entityRenderer.enableLightmap();
-        GlStateManager.disableCull();
+        // under a pack every triangle is built once per side (RenderData.fill), so the back faces go
+        if (pack) {
+            GlStateManager.enableCull();
+            GlStateManager.cullFace(GlStateManager.CullFace.BACK);
+        } else {
+            GlStateManager.disableCull();
+        }
         GlStateManager.enableTexture2D();
         GlStateManager.disableLighting();
         GlStateManager.shadeModel(GL11.GL_SMOOTH);
