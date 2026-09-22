@@ -86,6 +86,25 @@ public final class RenderData {
         /** The texture has cut-out texels (leaves), so its shadow-map copy needs texture coordinates. */
         boolean cutout;
         int color = -1;
+        /** How many faces of its own facing lie under this group's faces ({@link DepthLayers}); drawn that much nearer. */
+        int layer;
+
+        Group copy() {
+            Group g = new Group();
+            g.material = material;
+            g.face = face;
+            g.texture = texture;
+            g.textureKey = textureKey;
+            g.textureIndex = textureIndex;
+            g.translucent = translucent;
+            g.glow = glow;
+            g.worldUv = worldUv;
+            g.modelUv = modelUv;
+            g.cutout = cutout;
+            g.color = color;
+            g.layer = layer;
+            return g;
+        }
     }
 
     static final class Cell {
@@ -136,7 +155,8 @@ public final class RenderData {
     }
 
     public final LoadedInstance li;
-    final Group[] groups;
+    /** Set in the constructor and extended once by {@link #build} (layers), before anything is drawn. */
+    Group[] groups;
     private final int[] groupBase;
     private final int ux, uy, uz;
 
@@ -304,6 +324,19 @@ public final class RenderData {
             }
         }
 
+        // ---- surfaces lying just over others: drawn nearer, so they do not fight in the distance ----
+        if (MeshImporterConfig.depthLayers && tris > 1) {
+            long t0 = System.nanoTime();
+            try {
+                byte[] layers = DepthLayers.compute(loc, nrm, idx, tris, (float) MeshImporterConfig.depthLayerGap);
+                int over = splitByLayer(triGroup, layers);
+                MeshImporter.logger.info("Model #" + li.instance.id + ": " + over + " of " + tris + " faces lie over others, layers found in "
+                    + (System.nanoTime() - t0) / 1_000_000 + " ms");
+            } catch (RuntimeException | OutOfMemoryError e) {
+                MeshImporter.logger.warn("No depth layers for model #" + li.instance.id + ": " + e);
+            }
+        }
+
         // ---- cells ----
         float cs = MeshImporterConfig.cellSize;
         Map<Long, Integer> ids = new HashMap<>();
@@ -378,6 +411,36 @@ public final class RenderData {
         if (texelBytes > 0) MeshImporter.logger.info("Model #" + li.instance.id + ": " + nc + " cells, light textures " + (texelBytes / 1048576) + " MB");
         cells = out;
         built = true;
+    }
+
+    /**
+     * Gives every layer above the lowest its own copy of the group, so it can be drawn with its own depth offset.
+     * Returns how many triangles are above the lowest layer.
+     */
+    private int splitByLayer(int[] triGroup, byte[] layers) {
+        int stride = DepthLayers.MAX + 1;
+        boolean[] used = new boolean[groups.length * stride];
+        int over = 0;
+        for (int t = 0; t < triGroup.length; t++) {
+            if (layers[t] == 0) continue;
+            over++;
+            used[triGroup[t] * stride + layers[t]] = true;
+        }
+        // copies in rising layer order: drawn after what lies under them, so a tie in the depth buffer goes to the upper
+        int[] copyOf = new int[groups.length * stride];
+        List<Group> list = new ArrayList<>(Arrays.asList(groups));
+        for (int layer = 1; layer <= DepthLayers.MAX; layer++)
+            for (int g = 0; g < groups.length; g++) {
+                if (!used[g * stride + layer]) continue;
+                Group c = groups[g].copy();
+                c.layer = layer;
+                copyOf[g * stride + layer] = list.size();
+                list.add(c);
+            }
+        for (int t = 0; t < triGroup.length; t++)
+            if (layers[t] > 0) triGroup[t] = copyOf[triGroup[t] * stride + layers[t]];
+        groups = list.toArray(new Group[0]);
+        return over;
     }
 
     /** Prepares the light textures of a cell: its bounds plus a block of margin. Returns the bytes. */
@@ -812,9 +875,16 @@ public final class RenderData {
             return;
         }
         boolean translucentPass = pass == 1;
+        boolean layered = MeshImporterConfig.depthLayers;
+        int offsetLayer = -1;
+        if (layered) GlStateManager.enablePolygonOffset();
         for (int g = 0; g < groups.length; g++) {
             Group gr = groups[g];
             if (gr.translucent != translucentPass) continue;
+            if (layered && gr.layer != offsetLayer) {
+                offsetLayer = gr.layer;
+                depthOffset(offsetLayer);
+            }
             boolean bound = false;
             Cell lastVolume = null;
             for (int k = 0; k < nv; k++) {
@@ -835,7 +905,23 @@ public final class RenderData {
                 vb.drawArrays(GL11.GL_TRIANGLES);
             }
         }
+        if (layered) {
+            GlStateManager.doPolygonOffset(0f, 0f);
+            GlStateManager.disablePolygonOffset();
+        }
         GlStateManager.popMatrix();
+    }
+
+    /**
+     * Depth offset of a layer, in steps of the depth buffer, so it grows with the distance just as the buffer's
+     * blindness does. The lowest layer still comes a step forward, so a model's surface lying exactly on a block face
+     * shows the model rather than flickering with the block. Each layer above adds one step and a quarter of the
+     * surface's depth slope (a face seen edge-on changes depth across a pixel). Kept this small on purpose: a step is a
+     * real distance - 3 mm at 50 blocks, 30 cm at 500 - and a bigger pull would let details show through what stands
+     * in front of them. Layers are drawn in rising order, so what the steps leave tied goes to the upper one.
+     */
+    private static void depthOffset(int layer) {
+        GlStateManager.doPolygonOffset(-1f - 0.25f * layer, -1f - layer);
     }
 
     /** The pack's shadow map: the split copies, no colour, normal or light arrays (the caller switched them off). */

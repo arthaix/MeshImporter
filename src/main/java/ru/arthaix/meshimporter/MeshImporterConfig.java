@@ -25,6 +25,8 @@ public final class MeshImporterConfig {
     public static int cellSize = 64;
     public static boolean mapOverlay = true;
     public static int mapPixels = 4;
+    public static boolean depthLayers = true;
+    public static double depthLayerGap = 0.3;
 
     private MeshImporterConfig() {}
 
@@ -48,6 +50,8 @@ public final class MeshImporterConfig {
         cellSize = cfg.getInt("cellSize", "client", cellSize, 8, 128, "Meshes are split into cells of this many blocks for culling and light updates");
         mapOverlay = cfg.getBoolean("mapOverlay", "client", mapOverlay, "Draw placed models on JourneyMap: the model seen from above is laid over its footprint");
         mapPixels = cfg.getInt("mapPixels", "client", mapPixels, 1, 16, "Pixels per block of the picture a model gets on the map");
+        depthLayers = cfg.getBoolean("depthLayers", "client", depthLayers, "Surfaces lying just over others (a path over the ground, a marking on a road, two faces in one plane) are drawn a depth step nearer, so they do not flicker in the distance. A model also wins over a block face it lies exactly on");
+        depthLayerGap = cfg.get("client", "depthLayerGap", depthLayerGap, "Largest gap, in blocks, between two surfaces that still count as one lying on the other. Surfaces further apart than this start to flicker only beyond sqrt(gap * 838861) blocks: 0.3 is 500 blocks, the default mesh render distance", 0.02, 2.0).getDouble();
         if (cfg.hasChanged()) cfg.save();
     }
 }
