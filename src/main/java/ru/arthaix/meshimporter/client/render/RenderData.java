@@ -437,7 +437,7 @@ public final class RenderData {
                 int to = Math.min(n, from + 8192);
                 for (int v = from; v < to; v++) {
                     float vis = bake.sample(loc[3 * v], loc[3 * v + 1], loc[3 * v + 2], nrm[3 * v] / 127.0, nrm[3 * v + 1] / 127.0, nrm[3 * v + 2] / 127.0);
-                    result[v] = (byte) Math.round(16 * LightBake.levelOf(vis, 0));
+                    result[v] = (byte) Math.round(16 * (pack ? packLevel(vis) : LightBake.levelOf(vis, 0)));
                 }
             }
         };
@@ -456,6 +456,16 @@ public final class RenderData {
             }
         }
         return result;
+    }
+
+    /**
+     * Sky level under a shader pack. Such a pack casts its own shadows and occlusion and takes the sky light of the
+     * lightmap to the third power or more, so the self-shadow of a facade (level 11-13 from window recesses alone)
+     * turned whole buildings black. There the bake only tells enclosed rooms from the outside: whatever sees an
+     * eighth of the sky or more is open air, deeper insides keep a dim level so they do not glow with daylight.
+     */
+    static float packLevel(float visibility) {
+        return LightBake.levelOf(visibility * 8, 0);
     }
 
     private void fill(Cell c, int g, ByteBuffer buf) {
