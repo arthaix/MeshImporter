@@ -202,6 +202,26 @@ public final class Shaders {
         }
     }
 
+    private static java.lang.reflect.Field shadowPassField;
+    private static boolean shadowPassLooked;
+
+    /** Whether OptiFine is drawing the shadow map of a pack right now (it draws entity passes 0 and 1 there too). */
+    public static boolean packShadowPass() {
+        if (!shadowPassLooked) {
+            shadowPassLooked = true;
+            try {
+                shadowPassField = Class.forName("net.optifine.shaders.Shaders", false, Shaders.class.getClassLoader()).getField("isShadowPass");
+            } catch (ReflectiveOperationException | LinkageError e) {
+                shadowPassField = null;
+            }
+        }
+        try {
+            return shadowPassField != null && shadowPassField.getBoolean(null);
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
+    }
+
     public static void endPackTranslucent() {
         if (packPrevious == null) return;
         try {

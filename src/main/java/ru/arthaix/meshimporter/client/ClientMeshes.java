@@ -301,6 +301,9 @@ public final class ClientMeshes {
 
         boolean shader = Shaders.active();
         boolean pack = !shader && Shaders.shaderPack();
+        // glass casts no shadow: in the pack's shadow map it came out as a solid caster (depth is written for
+        // see-through surfaces under a pack) and put whole facades under glazed loggias into shade
+        if (pack && pass == 1 && Shaders.packShadowPass()) return;
         // first, because switching the pack's program sets its own blend state
         if (pack && pass == 1) Shaders.beginPackTranslucent();
 
