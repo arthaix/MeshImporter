@@ -488,7 +488,7 @@ public final class RenderData {
         byte[] nrm = li.normals;
         int s = c.groupStart[g], e = s + c.groupCount[g];
         if (!pack) {
-            for (int k = s; k < e; k++) vertex(c, gr, k, 1, buf);
+            for (int k = s; k < e; k++) vertex(c, gr, k, 1, cornerLight(c, gr, k, 1), buf);
             return;
         }
         for (int k = s; k < e; k += 3) {
@@ -498,20 +498,45 @@ public final class RenderData {
             double facing = (e1y * e2z - e1z * e2y) * nrm[3 * a] + (e1z * e2x - e1x * e2z) * nrm[3 * a + 1] + (e1x * e2y - e1y * e2x) * nrm[3 * a + 2];
             // counter-clockwise seen from the side the normal points to is the front
             boolean ccw = facing >= 0;
-            vertex(c, gr, k, 1, buf);
-            vertex(c, gr, ccw ? k + 1 : k + 2, 1, buf);
-            vertex(c, gr, ccw ? k + 2 : k + 1, 1, buf);
-            vertex(c, gr, k, -1, buf);
-            vertex(c, gr, ccw ? k + 2 : k + 1, -1, buf);
-            vertex(c, gr, ccw ? k + 1 : k + 2, -1, buf);
+            // one light per face and side: the pack cubes the sky level, and interpolated across triangles tens of
+            // blocks long a single darker corner (a window recess) became smooth gradients and long dark streaks
+            int front = faceLight(c, gr, k, 1), back = faceLight(c, gr, k, -1);
+            vertex(c, gr, k, 1, front, buf);
+            vertex(c, gr, ccw ? k + 1 : k + 2, 1, front, buf);
+            vertex(c, gr, ccw ? k + 2 : k + 1, 1, front, buf);
+            vertex(c, gr, k, -1, back, buf);
+            vertex(c, gr, ccw ? k + 2 : k + 1, -1, back, buf);
+            vertex(c, gr, ccw ? k + 1 : k + 2, -1, back, buf);
         }
     }
 
-    private void vertex(Cell c, Group gr, int k, int side, ByteBuffer buf) {
+    /** The brightest corner of a triangle, sky and block light separately (sky << 16 | block). */
+    private int faceLight(Cell c, Group gr, int k, int side) {
+        int sky = 0, block = 0;
+        for (int i = 0; i < 3; i++) {
+            int l = cornerLight(c, gr, k + i, side);
+            sky = Math.max(sky, l >>> 16);
+            block = Math.max(block, l & 0xFFFF);
+        }
+        return (sky << 16) | block;
+    }
+
+    /** Lightmap coordinates of a corner (sky << 16 | block, both 0..240): world light, capped by the mesh's own sky. */
+    private int cornerLight(Cell c, Group gr, int k, int side) {
+        if (gr.glow) return (240 << 16) | 240;
+        int floor = MeshImporterConfig.shadowLevel * 16;
+        int v = c.corners[k];
+        char l = c.light[k];
+        int sky = l >> 8, block = l & 255;
+        byte[] baked = pack ? (side > 0 ? vertexSky : vertexSkyBack) : shaded ? null : vertexSky;
+        if (baked != null) sky = Math.min(sky, Math.max(baked[v] & 255, floor));
+        return (sky << 16) | block;
+    }
+
+    private void vertex(Cell c, Group gr, int k, int side, int light, ByteBuffer buf) {
         float[] loc = li.local;
         byte[] nrm = li.normals;
         float[] uv = li.model.uvs;
-        int floor = MeshImporterConfig.shadowLevel * 16;
         int a = (gr.color >>> 24) & 255, r = (gr.color >> 16) & 255, gg = (gr.color >> 8) & 255, b = gr.color & 255;
         int v = c.corners[k];
         float x = loc[3 * v], y = loc[3 * v + 1], z = loc[3 * v + 2];
@@ -545,18 +570,7 @@ public final class RenderData {
             w = uv[2 * v + 1];
         }
         buf.putFloat(u).putFloat(w);
-        char l = c.light[k];
-        int sky = l >> 8, block = l & 255;
-        if (gr.glow) {
-            sky = 240;
-            block = 240;
-        } else if (pack) {
-            byte[] baked = side > 0 ? vertexSky : vertexSkyBack;
-            if (baked != null) sky = Math.min(sky, Math.max(baked[v] & 255, floor));
-        } else if (!shaded && vertexSky != null) {
-            sky = Math.min(sky, Math.max(vertexSky[v] & 255, floor));
-        }
-        buf.putShort((short) block).putShort((short) sky);
+        buf.putShort((short) (light & 0xFFFF)).putShort((short) (light >>> 16));
         byte nx = (byte) (side * nrm[3 * v]), ny = (byte) (side * nrm[3 * v + 1]), nz = (byte) (side * nrm[3 * v + 2]);
         buf.put(nx).put(ny).put(nz).put((byte) 0);
         tangent(nx, ny, nz, buf);
