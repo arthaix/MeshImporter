@@ -59,6 +59,17 @@ public final class Textures {
         return white;
     }
 
+    private static final Map<Integer, Integer> whites = new HashMap<>();
+
+    /**
+     * White with the given alpha. An OptiFine shader pack takes the opacity of a translucent surface from its texture
+     * alone (the vertex alpha is ambient occlusion there), so a plain see-through colour has to carry it here.
+     */
+    public static int white(int alpha) {
+        if (alpha >= 255) return white();
+        return whites.computeIfAbsent(alpha, a -> upload(prepare(new int[] { (a << 24) | 0xFFFFFF }, 1, 1, true)));
+    }
+
     /** GL texture of a block face and the tint index of its quad (-1 = untinted). Game thread. */
     public static int[] blockFace(IBlockState state, EnumFacing face) {
         String key = Block.getStateId(state) + "/" + face.getIndex();
@@ -136,6 +147,8 @@ public final class Textures {
         modelTextures.clear();
         if (white >= 0) GlStateManager.deleteTexture(white);
         white = -1;
+        for (Integer id : whites.values()) GlStateManager.deleteTexture(id);
+        whites.clear();
         atlas = null;
         atlasTried = false;
     }

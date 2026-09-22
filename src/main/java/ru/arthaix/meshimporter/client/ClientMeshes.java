@@ -299,6 +299,11 @@ public final class ClientMeshes {
         frustum.setPosition(camX, camY, camZ);
         double maxDist = MeshImporterConfig.renderDistance;
 
+        boolean shader = Shaders.active();
+        boolean pack = !shader && Shaders.shaderPack();
+        // first, because switching the pack's program sets its own blend state
+        if (pack && pass == 1) Shaders.beginPackTranslucent();
+
         mc.entityRenderer.enableLightmap();
         GlStateManager.disableCull();
         GlStateManager.enableTexture2D();
@@ -307,7 +312,8 @@ public final class ClientMeshes {
         if (pass == 1) {
             GlStateManager.enableBlend();
             GlStateManager.tryBlendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA, GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
-            GlStateManager.depthMask(false);
+            // a pack sorts translucent surfaces by the depth they write, as it does for water
+            GlStateManager.depthMask(pack);
         } else {
             GlStateManager.disableBlend();
             GlStateManager.enableAlpha();
@@ -323,8 +329,6 @@ public final class ClientMeshes {
         GlStateManager.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
 
-        boolean shader = Shaders.active();
-        boolean pack = !shader && Shaders.shaderPack();
         if (shader) Shaders.begin(pass);
         if (pack) Shaders.beginPack();
         try {
@@ -332,6 +336,7 @@ public final class ClientMeshes {
         } finally {
             if (shader) Shaders.end();
             if (pack) Shaders.endPack();
+            if (pack && pass == 1) Shaders.endPackTranslucent();
         }
 
         OpenGlHelper.glBindBuffer(OpenGlHelper.GL_ARRAY_BUFFER, 0);

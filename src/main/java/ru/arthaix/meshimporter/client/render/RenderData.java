@@ -46,10 +46,11 @@ import ru.arthaix.meshimporter.model.MeshModel;
  */
 public final class RenderData {
 
-    static final int VERTEX_BYTES = 32;
+    static final int VERTEX_BYTES = 36;
     /**
-     * Minecraft's block format plus a normal: a shader pack lights our triangles by gl_Normal, and without it faces
-     * come out inside out or black.
+     * Minecraft's block format plus a normal and a tangent: a shader pack lights our triangles by gl_Normal (without
+     * it faces come out inside out or black) and builds its normal-map frame from at_tangent, which must not be
+     * parallel to the normal or the frame collapses into NaN.
      */
     static final net.minecraft.client.renderer.vertex.VertexFormat FORMAT = new net.minecraft.client.renderer.vertex.VertexFormat()
         .addElement(DefaultVertexFormats.POSITION_3F)
@@ -57,7 +58,8 @@ public final class RenderData {
         .addElement(DefaultVertexFormats.TEX_2F)
         .addElement(DefaultVertexFormats.TEX_2S)
         .addElement(DefaultVertexFormats.NORMAL_3B)
-        .addElement(DefaultVertexFormats.PADDING_1B);
+        .addElement(DefaultVertexFormats.PADDING_1B)
+        .addElement(new net.minecraft.client.renderer.vertex.VertexFormatElement(0, net.minecraft.client.renderer.vertex.VertexFormatElement.EnumType.BYTE, net.minecraft.client.renderer.vertex.VertexFormatElement.EnumUsage.PADDING, 4));
     /** Largest light texture per cell; bigger cells get coarser texels. */
     private static final int MAX_TEXELS = 400_000;
 
@@ -123,6 +125,8 @@ public final class RenderData {
     /** Mesh sky light per model vertex, 0..240, for drawing without the shader; null = none baked. */
     private byte[] vertexSky;
     private boolean shaded;
+    /** Built for an OptiFine shader pack: it does its own directional shading, so ours stays out of the colour. */
+    private boolean pack;
 
     private final Map<String, Textures.Image> decoded = new HashMap<>();
     public volatile boolean built;
@@ -140,6 +144,7 @@ public final class RenderData {
     public RenderData(LoadedInstance li, World world) {
         this.li = li;
         this.shaded = Shaders.active();
+        this.pack = !shaded && Shaders.shaderPack();
         MeshModel m = li.model;
         ux = li.instance.anchorX & 255;
         uy = li.instance.anchorY & 255;
@@ -204,6 +209,11 @@ public final class RenderData {
             }
         }
         groups = list.toArray(new Group[0]);
+        if (pack) {
+            // a pack's glass program reads opacity from the texture only: plain colours get a white one with the alpha
+            for (Group g : groups)
+                if (g.translucent && g.textureKey == null && g.texture == Textures.white()) g.texture = Textures.white((g.color >>> 24) & 255);
+        }
     }
 
     private static int multiply(int argb, int rgb) {
@@ -461,11 +471,12 @@ public final class RenderData {
             float x = loc[3 * v], y = loc[3 * v + 1], z = loc[3 * v + 2];
             buf.putFloat(x).putFloat(y).putFloat(z);
             float shade = 1f;
-            if (!gr.glow) {
+            if (!gr.glow && !pack) {
                 float nx = nrm[3 * v] / 127f, ny = nrm[3 * v + 1] / 127f, nz = nrm[3 * v + 2] / 127f;
                 shade = Math.min(1f, nx * nx * 0.6f + nz * nz * 0.8f + ny * ny * (ny > 0 ? 1f : 0.5f));
             }
-            buf.put((byte) (int) (r * shade)).put((byte) (int) (gg * shade)).put((byte) (int) (b * shade)).put((byte) a);
+            // under a pack the vertex alpha of see-through surfaces is read as ambient occlusion, not opacity
+            buf.put((byte) (int) (r * shade)).put((byte) (int) (gg * shade)).put((byte) (int) (b * shade)).put((byte) (pack && gr.translucent ? 255 : a));
             float u = 0, w = 0;
             if (gr.worldUv) {
                 switch (gr.face) {
@@ -498,7 +509,30 @@ public final class RenderData {
             }
             buf.putShort((short) block).putShort((short) sky);
             buf.put(nrm[3 * v]).put(nrm[3 * v + 1]).put(nrm[3 * v + 2]).put((byte) 0);
+            tangent(nrm[3 * v], nrm[3 * v + 1], nrm[3 * v + 2], buf);
         }
+    }
+
+    /** Any unit direction across the normal (the texture has no normal map of its own to line up with), w = +1. */
+    static void tangent(byte nx, byte ny, byte nz, ByteBuffer buf) {
+        // cross(a, n) with a = up, or +X for faces that look up or down
+        double tx, ty, tz;
+        if (Math.abs(ny) < 0.9 * 127) {
+            tx = nz;
+            ty = 0;
+            tz = -nx;
+        } else {
+            tx = 0;
+            ty = -nz;
+            tz = ny;
+        }
+        double len = Math.sqrt(tx * tx + ty * ty + tz * tz);
+        if (len < 1e-6) {
+            tx = 1;
+            ty = tz = 0;
+            len = 1;
+        }
+        buf.put((byte) Math.round(tx / len * 127)).put((byte) Math.round(ty / len * 127)).put((byte) Math.round(tz / len * 127)).put((byte) 127);
     }
 
     // ---- GPU (game thread) ----
@@ -721,6 +755,8 @@ public final class RenderData {
         GlStateManager.glTexCoordPointer(2, GL11.GL_SHORT, VERTEX_BYTES, 24);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
         GL11.glNormalPointer(GL11.GL_BYTE, VERTEX_BYTES, 28L);
+        int tangent = Shaders.packTangentSlot();
+        if (tangent >= 0) org.lwjgl.opengl.GL20.glVertexAttribPointer(tangent, 4, GL11.GL_BYTE, true, VERTEX_BYTES, 32L);
     }
 
     /**

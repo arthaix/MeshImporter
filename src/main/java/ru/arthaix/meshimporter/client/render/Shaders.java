@@ -106,6 +106,12 @@ public final class Shaders {
     private static final java.nio.FloatBuffer PACK_BUF = org.lwjgl.BufferUtils.createFloatBuffer(16);
     private static final java.nio.IntBuffer PACK_INT = org.lwjgl.BufferUtils.createIntBuffer(16);
     private static boolean packLooked;
+    /** Tangent slot while a pack draw is running (our VBOs carry a tangent), -1 otherwise. */
+    private static int packTangent = -1;
+    private static java.lang.reflect.Field packDefaultTexture;
+    private static java.lang.reflect.Method packBindNS;
+    private static boolean nsLooked;
+    private static final int[] nsSaved = { -1, -1 };
     private static java.lang.reflect.Field optifinePack;
     private static boolean optifineLooked;
 
@@ -151,15 +157,123 @@ public final class Shaders {
         // mc_Entity: not a block; mc_midTexCoord: no sprite centre to give; at_tangent: any one direction, handedness +1
         if (att[0] >= 0) GL20.glVertexAttrib4f(att[0], -1f, -1f, 0f, 0f);
         if (att[1] >= 0) GL20.glVertexAttrib4f(att[1], 0f, 0f, 0f, 1f);
-        if (att[2] >= 0) GL20.glVertexAttrib4f(att[2], 1f, 0f, 0f, 1f);
+        // the tangent comes from our own buffer (RenderData.pointers): a constant one is parallel to every face
+        // that looks along it, and the pack's normal-map frame turns into NaN there
+        packTangent = att[2];
+        if (att[2] >= 0) GL20.glEnableVertexAttribArray(att[2]);
+        bindNeutralMaps();
+    }
+
+    private static java.lang.reflect.Method packUseProgram;
+    private static java.lang.reflect.Field packWater, packActive, packShadowPass;
+    private static boolean waterLooked;
+    private static Object packPrevious;
+
+    /**
+     * See-through surfaces under a pack: the entity program the pack gives us (gbuffers_entities) has blending
+     * switched off and writes alpha 1, so glass came out as dark opaque panes. Draw them with the program of
+     * translucent terrain instead (gbuffers_water - glass, not water, for a block without an id), with depth written
+     * like OptiFine does for water. Not in the shadow pass, which has one program for everything.
+     */
+    public static void beginPackTranslucent() {
+        packPrevious = null;
+        if (!waterLooked) {
+            waterLooked = true;
+            try {
+                Class<?> c = Class.forName("net.optifine.shaders.Shaders", false, Shaders.class.getClassLoader());
+                packWater = c.getField("ProgramWater");
+                packActive = c.getField("activeProgram");
+                packShadowPass = c.getField("isShadowPass");
+                packUseProgram = c.getMethod("useProgram", packWater.getType());
+            } catch (ReflectiveOperationException | LinkageError e) {
+                packUseProgram = null;
+                MeshImporter.logger.warn("OptiFine has no water program to lend: see-through mesh surfaces stay opaque under a shader pack: " + e);
+            }
+        }
+        if (packUseProgram == null) return;
+        try {
+            if (packShadowPass.getBoolean(null)) return;
+            Object previous = packActive.get(null);
+            packUseProgram.invoke(null, packWater.get(null));
+            packPrevious = previous;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            packUseProgram = null;
+            MeshImporter.logger.warn("Could not switch to the shader pack's water program: " + e);
+        }
+    }
+
+    public static void endPackTranslucent() {
+        if (packPrevious == null) return;
+        try {
+            packUseProgram.invoke(null, packPrevious);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            packUseProgram = null;
+        }
+        packPrevious = null;
+    }
+
+    /** Tangent attribute slot to point at our buffer while a pack draw runs, -1 when there is none. */
+    public static int packTangentSlot() {
+        return packTangent;
+    }
+
+    /**
+     * The pack reads normal and specular maps from units 2 and 3. OptiFine only sets them when a texture goes through
+     * its TextureManager; ours are bound directly, so those units still held whatever was drawn before (usually the
+     * block atlas maps of the resource pack), and our walls picked up random smoothness and metalness at their UVs -
+     * dark, mirror-like facades. Bind OptiFine's own flat normal and blank specular for the duration.
+     */
+    private static void bindNeutralMaps() {
+        nsSaved[0] = nsSaved[1] = -1;
+        if (!nsLooked) {
+            nsLooked = true;
+            try {
+                ClassLoader loader = Shaders.class.getClassLoader();
+                packDefaultTexture = Class.forName("net.optifine.shaders.Shaders", false, loader).getField("defaultTexture");
+                packBindNS = Class.forName("net.optifine.shaders.ShadersTex", false, loader).getMethod("bindNSTextures", int.class, int.class);
+            } catch (ReflectiveOperationException | LinkageError e) {
+                packDefaultTexture = null;
+                packBindNS = null;
+                MeshImporter.logger.warn("OptiFine keeps its default normal/specular maps elsewhere; meshes keep whatever is bound: " + e);
+            }
+        }
+        if (packBindNS == null) return;
+        try {
+            Object tex = packDefaultTexture.get(null);
+            if (tex == null) return;
+            Object multi = net.minecraft.client.renderer.texture.ITextureObject.class.getMethod("getMultiTexID").invoke(tex);
+            if (multi == null) return;
+            int norm = multi.getClass().getField("norm").getInt(multi);
+            int spec = multi.getClass().getField("spec").getInt(multi);
+            GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit + 2);
+            nsSaved[0] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit + 3);
+            nsSaved[1] = GL11.glGetInteger(GL11.GL_TEXTURE_BINDING_2D);
+            GlStateManager.setActiveTexture(OpenGlHelper.defaultTexUnit);
+            packBindNS.invoke(null, norm, spec);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            nsSaved[0] = nsSaved[1] = -1;
+            packBindNS = null;
+            MeshImporter.logger.warn("Could not bind OptiFine's default normal/specular maps: " + e);
+        }
     }
 
     /** Gives the shader pack's attributes back exactly as they were. */
     public static void endPack() {
         int[] att = packAttribs();
+        if (nsSaved[0] >= 0 && packBindNS != null) {
+            try {
+                packBindNS.invoke(null, nsSaved[0], nsSaved[1]);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // the next texture OptiFine binds sets them again anyway
+            }
+        }
+        nsSaved[0] = nsSaved[1] = -1;
+        packTangent = -1;
         if (att == null) return;
         for (int i = 0; i < att.length; i++) {
             if (att[i] < 0) continue;
+            if (i == 2) GL20.glDisableVertexAttribArray(att[i]);
             GL20.glVertexAttrib4f(att[i], packSaved[i][0], packSaved[i][1], packSaved[i][2], packSaved[i][3]);
             if (packWasArray[i]) GL20.glEnableVertexAttribArray(att[i]);
         }
