@@ -14,6 +14,7 @@ import java.util.concurrent.Executors;
 
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.command.ICommandSender;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.item.ItemBlock;
 import net.minecraft.item.ItemStack;
@@ -528,12 +529,49 @@ public final class MeshServer {
     /** A click never starts breaking an anchor, in any game mode: removal is the five-second hold. */
     @SubscribeEvent
     public void onLeftClickAnchor(PlayerInteractEvent.LeftClickBlock event) {
-        if (event.getWorld().getBlockState(event.getPos()).getBlock() instanceof BlockMeshAnchor) event.setCanceled(true);
+        if (event.getWorld().getBlockState(event.getPos()).getBlock() instanceof BlockMeshAnchor) {
+            event.setCanceled(true);
+            tellHowToRemove(event.getEntityPlayer(), event.getWorld(), event.getPos());
+        }
     }
 
     @SubscribeEvent
     public void onBreakAnchor(BlockEvent.BreakEvent event) {
-        if (event.getState().getBlock() instanceof BlockMeshAnchor && !isAuthorisedBreak(event.getWorld(), event.getPos())) event.setCanceled(true);
+        if (event.getState().getBlock() instanceof BlockMeshAnchor && !isAuthorisedBreak(event.getWorld(), event.getPos())) {
+            event.setCanceled(true);
+            tellHowToRemove(event.getPlayer(), event.getWorld(), event.getPos());
+        }
+    }
+
+    /** When someone was last told how an anchor comes out, so hitting it does not fill the chat. */
+    private final Map<UUID, Long> toldHowToRemove = new HashMap<>();
+
+    /**
+     * Mining an anchor does nothing, which looks like the block is simply stuck. Whoever tries is told what does work,
+     * at most once every ten seconds.
+     */
+    private void tellHowToRemove(EntityPlayer player, World world, BlockPos pos) {
+        if (!(player instanceof EntityPlayerMP) || world.isRemote) return;
+        long now = world.getTotalWorldTime();
+        Long last = toldHowToRemove.get(player.getUniqueID());
+        if (last != null && now - last < 200 && now >= last) return;
+        toldHowToRemove.put(player.getUniqueID(), now);
+        StringBuilder models = new StringBuilder();
+        TileEntity te = world.getTileEntity(pos);
+        if (te instanceof TileEntityMeshAnchor) {
+            TileEntityMeshAnchor anchor = (TileEntityMeshAnchor) te;
+            for (int i = 0; i < anchor.slotCount(); i++) {
+                int id = anchor.instanceId(i);
+                if (id <= 0) continue;
+                models.append(models.length() == 0 ? "" : ", ").append('#').append(id);
+            }
+        }
+        chat((EntityPlayerMP) player, TextFormatting.YELLOW + "This anchor holds the model"
+            + (models.length() == 0 ? "s built on it" : (models.indexOf(",") >= 0 ? "s " : " ") + models)
+            + ", so it cannot be mined.");
+        chat((EntityPlayerMP) player, TextFormatting.YELLOW + "Hold the attack button on it for five seconds to take it"
+            + " out with them, right-click it with an empty hand to open it, or use "
+            + TextFormatting.WHITE + "/meshimporter remove <id>" + TextFormatting.YELLOW + ".");
     }
 
     /** Track on its way out of the world, a few thousand blocks a tick. */
