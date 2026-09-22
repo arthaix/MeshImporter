@@ -60,6 +60,18 @@ public final class RenderData {
         .addElement(DefaultVertexFormats.NORMAL_3B)
         .addElement(DefaultVertexFormats.PADDING_1B)
         .addElement(new net.minecraft.client.renderer.vertex.VertexFormatElement(0, net.minecraft.client.renderer.vertex.VertexFormatElement.EnumType.BYTE, net.minecraft.client.renderer.vertex.VertexFormatElement.EnumUsage.PADDING, 4));
+    /** Shadow-map copies: position only, or position and texture coordinates for surfaces with cut-out texels. */
+    static final net.minecraft.client.renderer.vertex.VertexFormat SHADOW_FORMAT = new net.minecraft.client.renderer.vertex.VertexFormat()
+        .addElement(DefaultVertexFormats.POSITION_3F);
+    static final net.minecraft.client.renderer.vertex.VertexFormat SHADOW_FORMAT_UV = new net.minecraft.client.renderer.vertex.VertexFormat()
+        .addElement(DefaultVertexFormats.POSITION_3F)
+        .addElement(DefaultVertexFormats.TEX_2F);
+    /**
+     * Longest triangle edge in the shadow-map copy. A pack warps its shadow map per vertex (finer near the player),
+     * and a triangle rasterised straight between warped corners leaves the curve of the warp: a 67-block edge landed
+     * up to 35 blocks off, so walls shadowed themselves in arcs and streaks. 2.5 blocks keeps it under a tenth of a block.
+     */
+    private static final float SHADOW_EDGE = 2.5f;
     /** Largest light texture per cell; bigger cells get coarser texels. */
     private static final int MAX_TEXELS = 400_000;
 
@@ -71,6 +83,8 @@ public final class RenderData {
         String textureKey;
         int textureIndex = -1;
         boolean translucent, glow, worldUv, modelUv;
+        /** The texture has cut-out texels (leaves), so its shadow-map copy needs texture coordinates. */
+        boolean cutout;
         int color = -1;
     }
 
@@ -83,6 +97,9 @@ public final class RenderData {
         char[] light;
         final int[] groupStart, groupCount;
         final VertexBuffer[] vbo;
+        /** Under a pack: the finely split one-sided copy drawn into its shadow map, per group. */
+        final VertexBuffer[] shadowVbo;
+        final ByteBuffer[] shadowPending;
         final ByteBuffer[] pending;
         /** Light volume: texel (0, 0, 0) at this anchor-relative block, size in texels, blocks per texel. */
         int volX, volY, volZ, volW, volH, volD, volStep = 1;
@@ -104,6 +121,8 @@ public final class RenderData {
             groupCount = new int[groups];
             vbo = new VertexBuffer[groups];
             pending = new ByteBuffer[groups];
+            shadowVbo = new VertexBuffer[groups];
+            shadowPending = new ByteBuffer[groups];
         }
 
         void include(float x, float y, float z) {
@@ -181,6 +200,7 @@ public final class RenderData {
                         if (!li.preview) WebTextures.offer(mat.blockId, state, f, mult);
                         g.worldUv = true;
                         g.translucent = alphaBlend || blockTranslucent;
+                        g.cutout = state.getBlock().getRenderLayer() != BlockRenderLayer.SOLID;
                         g.glow = mat.glow;
                         list.add(g);
                     }
@@ -194,6 +214,7 @@ public final class RenderData {
                     g.texture = g.textureKey == null ? Textures.white() : Textures.modelTexture(g.textureKey);
                     g.color = mat.color;
                     g.modelUv = mat.texture >= 0;
+                    g.cutout = g.modelUv;
                     g.translucent = alphaBlend;
                     g.glow = mat.glow;
                     list.add(g);
@@ -313,7 +334,7 @@ public final class RenderData {
         int groupCount = groups.length;
         Cell[] out = new Cell[nc];
         int[] gcount = new int[groupCount];
-        long texelBytes = 0;
+        long texelBytes = 0, shadowBytes = 0;
         for (int ci = 0; ci < nc && !disposed; ci++) {
             Arrays.fill(gcount, 0);
             for (int k = start[ci]; k < start[ci + 1]; k++) gcount[triGroup[order[k]]]++;
@@ -346,9 +367,14 @@ public final class RenderData {
                 fill(cell, g, buf);
                 buf.flip();
                 cell.pending[g] = buf;
+                if (pack && !groups[g].translucent) {
+                    cell.shadowPending[g] = shadowBuffer(cell, g);
+                    shadowBytes += cell.shadowPending[g].limit();
+                }
             }
             out[ci] = cell;
         }
+        if (shadowBytes > 0) MeshImporter.logger.info("Model #" + li.instance.id + ": shadow-map copy " + (shadowBytes / 1048576) + " MB");
         if (texelBytes > 0) MeshImporter.logger.info("Model #" + li.instance.id + ": " + nc + " cells, light textures " + (texelBytes / 1048576) + " MB");
         cells = out;
         built = true;
@@ -550,21 +576,9 @@ public final class RenderData {
         buf.put((byte) (int) (r * shade)).put((byte) (int) (gg * shade)).put((byte) (int) (b * shade)).put((byte) (pack && gr.translucent ? 255 : a));
         float u = 0, w = 0;
         if (gr.worldUv) {
-            switch (gr.face) {
-                case 0:
-                case 1:
-                    u = x + ux;
-                    w = z + uz;
-                    break;
-                case 2:
-                case 3:
-                    u = x + ux;
-                    w = -(y + uy);
-                    break;
-                default:
-                    u = z + uz;
-                    w = -(y + uy);
-            }
+            float[] tex = worldUv(gr, x, y, z);
+            u = tex[0];
+            w = tex[1];
         } else if (gr.modelUv && uv != null) {
             u = uv[2 * v];
             w = uv[2 * v + 1];
@@ -623,6 +637,15 @@ public final class RenderData {
                 vb.bufferData(b);
                 c.vbo[g] = vb;
                 c.pending[g] = null;
+                used += b.limit();
+            }
+            for (int g = 0; g < c.shadowPending.length; g++) {
+                ByteBuffer b = c.shadowPending[g];
+                if (b == null) continue;
+                VertexBuffer vb = new VertexBuffer(groups[g].cutout ? SHADOW_FORMAT_UV : SHADOW_FORMAT);
+                vb.bufferData(b);
+                c.shadowVbo[g] = vb;
+                c.shadowPending[g] = null;
                 used += b.limit();
             }
             if (c.volPos != null) {
@@ -783,6 +806,11 @@ public final class RenderData {
         boolean shader = shaded && Shaders.active();
         GlStateManager.pushMatrix();
         GlStateManager.translate(ax - camX, ay - camY, az - camZ);
+        if (pack && pass == 0 && Shaders.packShadowPass()) {
+            drawShadow(nv);
+            GlStateManager.popMatrix();
+            return;
+        }
         boolean translucentPass = pass == 1;
         for (int g = 0; g < groups.length; g++) {
             Group gr = groups[g];
@@ -808,6 +836,127 @@ public final class RenderData {
             }
         }
         GlStateManager.popMatrix();
+    }
+
+    /** The pack's shadow map: the split copies, no colour, normal or light arrays (the caller switched them off). */
+    private void drawShadow(int nv) {
+        for (int g = 0; g < groups.length; g++) {
+            Group gr = groups[g];
+            if (gr.translucent) continue;
+            boolean bound = false;
+            for (int k = 0; k < nv; k++) {
+                VertexBuffer vb = cells[visible[k]].shadowVbo[g];
+                if (vb == null) continue;
+                if (!bound) {
+                    GlStateManager.bindTexture(gr.cutout && gr.texture >= 0 ? gr.texture : Textures.white());
+                    if (gr.cutout) GlStateManager.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+                    else GlStateManager.glDisableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+                    bound = true;
+                }
+                vb.bindBuffer();
+                int stride = gr.cutout ? 20 : 12;
+                GlStateManager.glVertexPointer(3, GL11.GL_FLOAT, stride, 0);
+                if (gr.cutout) GlStateManager.glTexCoordPointer(2, GL11.GL_FLOAT, stride, 12);
+                vb.drawArrays(GL11.GL_TRIANGLES);
+            }
+        }
+        GlStateManager.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+    }
+
+    /**
+     * One side of every opaque triangle of a group, split until no edge is longer than {@link #SHADOW_EDGE}:
+     * positions, plus texture coordinates for cut-out textures.
+     */
+    private ByteBuffer shadowBuffer(Cell c, int g) {
+        Group gr = groups[g];
+        float[] loc = li.local;
+        float[] uv = li.model.uvs;
+        int stride = gr.cutout ? 20 : 12;
+        int s = c.groupStart[g], e = s + c.groupCount[g];
+        long vertices = 0;
+        for (int k = s; k < e; k += 3) {
+            long n = pieces(loc, c.corners[k], c.corners[k + 1], c.corners[k + 2]);
+            vertices += 3 * n * n;
+        }
+        ByteBuffer buf = ByteBuffer.allocateDirect((int) (vertices * stride)).order(ByteOrder.nativeOrder());
+        float[] pa = new float[5], pb = new float[5], pc = new float[5], q = new float[5];
+        for (int k = s; k < e; k += 3) {
+            int a = c.corners[k], b = c.corners[k + 1], d = c.corners[k + 2];
+            corner(gr, loc, uv, a, pa);
+            corner(gr, loc, uv, b, pb);
+            corner(gr, loc, uv, d, pc);
+            int n = pieces(loc, a, b, d);
+            for (int i = 0; i < n; i++)
+                for (int j = 0; i + j < n; j++) {
+                    point(pa, pb, pc, i, j, n, q, gr, buf);
+                    point(pa, pb, pc, i + 1, j, n, q, gr, buf);
+                    point(pa, pb, pc, i, j + 1, n, q, gr, buf);
+                    if (i + j < n - 1) {
+                        point(pa, pb, pc, i + 1, j, n, q, gr, buf);
+                        point(pa, pb, pc, i + 1, j + 1, n, q, gr, buf);
+                        point(pa, pb, pc, i, j + 1, n, q, gr, buf);
+                    }
+                }
+        }
+        buf.flip();
+        return buf;
+    }
+
+    /** Pieces per edge so that none is longer than SHADOW_EDGE. */
+    private static int pieces(float[] loc, int a, int b, int d) {
+        double e = Math.max(dist(loc, a, b), Math.max(dist(loc, b, d), dist(loc, d, a)));
+        return Math.max(1, (int) Math.ceil(e / SHADOW_EDGE));
+    }
+
+    private static double dist(float[] loc, int a, int b) {
+        double x = loc[3 * a] - loc[3 * b], y = loc[3 * a + 1] - loc[3 * b + 1], z = loc[3 * a + 2] - loc[3 * b + 2];
+        return Math.sqrt(x * x + y * y + z * z);
+    }
+
+    /** Position and model texture coordinates of a vertex. */
+    private static void corner(Group gr, float[] loc, float[] uv, int v, float[] out) {
+        out[0] = loc[3 * v];
+        out[1] = loc[3 * v + 1];
+        out[2] = loc[3 * v + 2];
+        boolean model = gr.modelUv && uv != null;
+        out[3] = model ? uv[2 * v] : 0;
+        out[4] = model ? uv[2 * v + 1] : 0;
+    }
+
+    /** Grid point (i, j) of a triangle split n times per edge. */
+    private void point(float[] a, float[] b, float[] c, int i, int j, int n, float[] q, Group gr, ByteBuffer buf) {
+        float u = (float) i / n, w = (float) j / n;
+        for (int t = 0; t < 5; t++) q[t] = a[t] + (b[t] - a[t]) * u + (c[t] - a[t]) * w;
+        buf.putFloat(q[0]).putFloat(q[1]).putFloat(q[2]);
+        if (!gr.cutout) return;
+        if (gr.worldUv) {
+            float[] tex = worldUv(gr, q[0], q[1], q[2]);
+            buf.putFloat(tex[0]).putFloat(tex[1]);
+        } else {
+            buf.putFloat(q[3]).putFloat(q[4]);
+        }
+    }
+
+    private final float[] worldTex = new float[2];
+
+    /** Texture coordinates of a block-face group at a position: the texture repeats once per block. */
+    private float[] worldUv(Group gr, float x, float y, float z) {
+        switch (gr.face) {
+            case 0:
+            case 1:
+                worldTex[0] = x + ux;
+                worldTex[1] = z + uz;
+                break;
+            case 2:
+            case 3:
+                worldTex[0] = x + ux;
+                worldTex[1] = -(y + uy);
+                break;
+            default:
+                worldTex[0] = z + uz;
+                worldTex[1] = -(y + uy);
+        }
+        return worldTex;
     }
 
     private static void pointers() {
@@ -945,6 +1094,9 @@ public final class RenderData {
                 if (c.vbo[g] != null) c.vbo[g].deleteGlBuffers();
                 c.vbo[g] = null;
                 c.pending[g] = null;
+                if (c.shadowVbo[g] != null) c.shadowVbo[g].deleteGlBuffers();
+                c.shadowVbo[g] = null;
+                c.shadowPending[g] = null;
             }
             if (c.texPos >= 0) GL11.glDeleteTextures(c.texPos);
             if (c.texNeg >= 0) GL11.glDeleteTextures(c.texNeg);

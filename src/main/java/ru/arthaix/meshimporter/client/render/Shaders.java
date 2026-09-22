@@ -141,7 +141,7 @@ public final class Shaders {
      * so an array still switched on from someone else's drawing would be read past its end - hence the torn and
      * missing triangles. Switch those arrays off for the duration and leave a sane constant in their place.
      */
-    public static void beginPack() {
+    public static void beginPack(boolean tangentArray) {
         int[] att = packAttribs();
         if (att == null) return;
         for (int i = 0; i < att.length; i++) {
@@ -159,8 +159,8 @@ public final class Shaders {
         if (att[1] >= 0) GL20.glVertexAttrib4f(att[1], 0f, 0f, 0f, 1f);
         // the tangent comes from our own buffer (RenderData.pointers): a constant one is parallel to every face
         // that looks along it, and the pack's normal-map frame turns into NaN there
-        packTangent = att[2];
-        if (att[2] >= 0) GL20.glEnableVertexAttribArray(att[2]);
+        packTangent = tangentArray ? att[2] : -1;
+        if (packTangent >= 0) GL20.glEnableVertexAttribArray(packTangent);
         bindNeutralMaps();
     }
 
@@ -289,11 +289,12 @@ public final class Shaders {
             }
         }
         nsSaved[0] = nsSaved[1] = -1;
+        int tangentArray = packTangent;
         packTangent = -1;
         if (att == null) return;
         for (int i = 0; i < att.length; i++) {
             if (att[i] < 0) continue;
-            if (i == 2) GL20.glDisableVertexAttribArray(att[i]);
+            if (i == 2 && tangentArray >= 0) GL20.glDisableVertexAttribArray(att[i]);
             GL20.glVertexAttrib4f(att[i], packSaved[i][0], packSaved[i][1], packSaved[i][2], packSaved[i][3]);
             if (packWasArray[i]) GL20.glEnableVertexAttribArray(att[i]);
         }

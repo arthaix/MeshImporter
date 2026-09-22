@@ -303,13 +303,15 @@ public final class ClientMeshes {
         boolean pack = !shader && Shaders.shaderPack();
         // glass casts no shadow: in the pack's shadow map it came out as a solid caster (depth is written for
         // see-through surfaces under a pack) and put whole facades under glazed loggias into shade
-        if (pack && pass == 1 && Shaders.packShadowPass()) return;
+        boolean shadowPass = pack && Shaders.packShadowPass();
+        if (shadowPass && pass == 1) return;
         // first, because switching the pack's program sets its own blend state
         if (pack && pass == 1) Shaders.beginPackTranslucent();
 
         mc.entityRenderer.enableLightmap();
-        // under a pack every triangle is built once per side (RenderData.fill), so the back faces go
-        if (pack) {
+        // under a pack every triangle is built once per side (RenderData.fill), so the back faces go; the shadow-map
+        // copy is one-sided
+        if (pack && !shadowPass) {
             GlStateManager.enableCull();
             GlStateManager.cullFace(GlStateManager.CullFace.BACK);
         } else {
@@ -330,16 +332,23 @@ public final class ClientMeshes {
             GlStateManager.depthMask(true);
         }
         GlStateManager.glEnableClientState(GL11.GL_VERTEX_ARRAY);
-        GlStateManager.glEnableClientState(GL11.GL_COLOR_ARRAY);
-        GlStateManager.glEnableClientState(GL11.GL_NORMAL_ARRAY);
         OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
         GlStateManager.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
-        GlStateManager.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
-        OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        if (shadowPass) {
+            // the shadow-map copy carries positions (and texture coordinates) only
+            GlStateManager.color(1f, 1f, 1f, 1f);
+            GL11.glNormal3f(0f, 1f, 0f);
+            OpenGlHelper.setLightmapTextureCoords(OpenGlHelper.lightmapTexUnit, 240f, 240f);
+        } else {
+            GlStateManager.glEnableClientState(GL11.GL_COLOR_ARRAY);
+            GlStateManager.glEnableClientState(GL11.GL_NORMAL_ARRAY);
+            OpenGlHelper.setClientActiveTexture(OpenGlHelper.lightmapTexUnit);
+            GlStateManager.glEnableClientState(GL11.GL_TEXTURE_COORD_ARRAY);
+            OpenGlHelper.setClientActiveTexture(OpenGlHelper.defaultTexUnit);
+        }
 
         if (shader) Shaders.begin(pass);
-        if (pack) Shaders.beginPack();
+        if (pack) Shaders.beginPack(!shadowPass);
         try {
             for (RenderData rd : new ArrayList<>(list)) rd.draw(pass, frustum, camX, camY, camZ, maxDist * maxDist);
         } finally {
