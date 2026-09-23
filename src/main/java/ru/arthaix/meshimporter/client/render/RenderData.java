@@ -573,30 +573,46 @@ public final class RenderData {
      */
     private void fill(Cell c, int g, ByteBuffer buf) {
         Group gr = groups[g];
-        float[] loc = li.local;
-        byte[] nrm = li.normals;
         int s = c.groupStart[g], e = s + c.groupCount[g];
         if (!pack) {
-            for (int k = s; k < e; k++) vertex(c, gr, k, 1, cornerLight(c, gr, k, 1), buf);
+            // counter-clockwise from the front, so the draw can take fronts and backs apart by culling
+            for (int k = s; k < e; k += 3) {
+                boolean ccw = ccw(c, k);
+                int b = ccw ? k + 1 : k + 2, d = ccw ? k + 2 : k + 1;
+                vertex(c, gr, k, 1, cornerLight(c, gr, k, 1), buf);
+                vertex(c, gr, b, 1, cornerLight(c, gr, b, 1), buf);
+                vertex(c, gr, d, 1, cornerLight(c, gr, d, 1), buf);
+            }
             return;
         }
+        // every front first, then every back: the draw gives the backs their own depth offset
         for (int k = s; k < e; k += 3) {
-            int a = c.corners[k], b = c.corners[k + 1], d = c.corners[k + 2];
-            double e1x = loc[3 * b] - loc[3 * a], e1y = loc[3 * b + 1] - loc[3 * a + 1], e1z = loc[3 * b + 2] - loc[3 * a + 2];
-            double e2x = loc[3 * d] - loc[3 * a], e2y = loc[3 * d + 1] - loc[3 * a + 1], e2z = loc[3 * d + 2] - loc[3 * a + 2];
-            double facing = (e1y * e2z - e1z * e2y) * nrm[3 * a] + (e1z * e2x - e1x * e2z) * nrm[3 * a + 1] + (e1x * e2y - e1y * e2x) * nrm[3 * a + 2];
-            // counter-clockwise seen from the side the normal points to is the front
-            boolean ccw = facing >= 0;
+            boolean ccw = ccw(c, k);
             // one light per face and side: the pack cubes the sky level, and interpolated across triangles tens of
             // blocks long a single darker corner (a window recess) became smooth gradients and long dark streaks
-            int front = faceLight(c, gr, k, 1), back = faceLight(c, gr, k, -1);
+            int front = faceLight(c, gr, k, 1);
             vertex(c, gr, k, 1, front, buf);
             vertex(c, gr, ccw ? k + 1 : k + 2, 1, front, buf);
             vertex(c, gr, ccw ? k + 2 : k + 1, 1, front, buf);
+        }
+        for (int k = s; k < e; k += 3) {
+            boolean ccw = ccw(c, k);
+            int back = faceLight(c, gr, k, -1);
             vertex(c, gr, k, -1, back, buf);
             vertex(c, gr, ccw ? k + 2 : k + 1, -1, back, buf);
             vertex(c, gr, ccw ? k + 1 : k + 2, -1, back, buf);
         }
+    }
+
+    /** Whether the triangle at corner k winds counter-clockwise seen from the side its normal points to. */
+    private boolean ccw(Cell c, int k) {
+        float[] loc = li.local;
+        byte[] nrm = li.normals;
+        int a = c.corners[k], b = c.corners[k + 1], d = c.corners[k + 2];
+        double e1x = loc[3 * b] - loc[3 * a], e1y = loc[3 * b + 1] - loc[3 * a + 1], e1z = loc[3 * b + 2] - loc[3 * a + 2];
+        double e2x = loc[3 * d] - loc[3 * a], e2y = loc[3 * d + 1] - loc[3 * a + 1], e2z = loc[3 * d + 2] - loc[3 * a + 2];
+        double facing = (e1y * e2z - e1z * e2y) * nrm[3 * a] + (e1z * e2x - e1x * e2z) * nrm[3 * a + 1] + (e1x * e2y - e1y * e2x) * nrm[3 * a + 2];
+        return facing >= 0;
     }
 
     /** The brightest corner of a triangle, sky and block light separately (sky << 16 | block). */
@@ -875,15 +891,47 @@ public final class RenderData {
             return;
         }
         boolean translucentPass = pass == 1;
-        boolean layered = MeshImporterConfig.depthLayers;
-        int offsetLayer = -1;
-        if (layered) GlStateManager.enablePolygonOffset();
+        if (!MeshImporterConfig.depthLayers) {
+            drawSide(nv, translucentPass, shader, false, false);
+        } else {
+            GlStateManager.enablePolygonOffset();
+            if (pack) {
+                // the pass culls back faces; each triangle is in the buffer once per side, fronts first
+                drawSide(nv, translucentPass, shader, true, false);
+                drawSide(nv, translucentPass, shader, true, true);
+            } else {
+                // one copy per triangle, wound from its front: culling takes the two sides apart. Glass is drawn
+                // far side first so it blends over itself the right way round
+                GlStateManager.enableCull();
+                GlStateManager.cullFace(translucentPass ? GlStateManager.CullFace.FRONT : GlStateManager.CullFace.BACK);
+                drawSide(nv, translucentPass, shader, true, translucentPass);
+                GlStateManager.cullFace(translucentPass ? GlStateManager.CullFace.BACK : GlStateManager.CullFace.FRONT);
+                drawSide(nv, translucentPass, shader, true, !translucentPass);
+                GlStateManager.cullFace(GlStateManager.CullFace.BACK);
+                GlStateManager.disableCull();
+            }
+            GlStateManager.doPolygonOffset(0f, 0f);
+            GlStateManager.disablePolygonOffset();
+        }
+        GlStateManager.popMatrix();
+    }
+
+    /**
+     * One pass over the groups. {@code split} draws one side only - the fronts with the depth offset of their layer, or
+     * the backs pushed a step away - so that a back never beats a front lying on it. Without it (depth layers
+     * switched off) everything is drawn as it always was.
+     */
+    private void drawSide(int nv, boolean translucentPass, boolean shader, boolean split, boolean backs) {
+        int offsetLayer = Integer.MIN_VALUE;
         for (int g = 0; g < groups.length; g++) {
             Group gr = groups[g];
             if (gr.translucent != translucentPass) continue;
-            if (layered && gr.layer != offsetLayer) {
-                offsetLayer = gr.layer;
-                depthOffset(offsetLayer);
+            if (split) {
+                int want = backs ? -1 : gr.layer;
+                if (want != offsetLayer) {
+                    offsetLayer = want;
+                    depthOffset(want);
+                }
             }
             boolean bound = false;
             Cell lastVolume = null;
@@ -902,26 +950,26 @@ public final class RenderData {
                 }
                 vb.bindBuffer();
                 pointers();
-                vb.drawArrays(GL11.GL_TRIANGLES);
+                int n = c.groupCount[g];
+                if (!split) GlStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, bufferVertices(c, g));
+                else if (pack) GlStateManager.glDrawArrays(GL11.GL_TRIANGLES, backs ? n : 0, n);
+                else GlStateManager.glDrawArrays(GL11.GL_TRIANGLES, 0, n);
             }
         }
-        if (layered) {
-            GlStateManager.doPolygonOffset(0f, 0f);
-            GlStateManager.disablePolygonOffset();
-        }
-        GlStateManager.popMatrix();
     }
 
     /**
-     * Depth offset of a layer, in steps of the depth buffer, so it grows with the distance just as the buffer's
-     * blindness does. The lowest layer still comes a step forward, so a model's surface lying exactly on a block face
-     * shows the model rather than flickering with the block. Each layer above adds one step and a quarter of the
-     * surface's depth slope (a face seen edge-on changes depth across a pixel). Kept this small on purpose: a step is a
-     * real distance - 3 mm at 50 blocks, 30 cm at 500 - and a bigger pull would let details show through what stands
-     * in front of them. Layers are drawn in rising order, so what the steps leave tied goes to the upper one.
+     * Depth offset of a side, in steps of the depth buffer, so it grows with the distance just as the buffer's
+     * blindness does. Fronts come forward by layer: the lowest one step, so a model's surface lying exactly on a
+     * block face shows the model rather than flickering with the block, and each layer above one step and a quarter of
+     * its depth slope more (a face seen edge-on changes depth across a pixel). Backs ({@code layer} -1) go a step and a
+     * slope back, so the underside of a floor never shows through the floor finish lying on it, nor one face of a
+     * double-sided sheet through the other. Kept this small on purpose: a step is a real distance - 3 mm at 50
+     * blocks, 30 cm at 500 - and a bigger pull would let details show through what stands in front of them.
      */
     private static void depthOffset(int layer) {
-        GlStateManager.doPolygonOffset(-1f - 0.25f * layer, -1f - layer);
+        if (layer < 0) GlStateManager.doPolygonOffset(1f, 1f);
+        else GlStateManager.doPolygonOffset(-1f - 0.25f * layer, -1f - layer);
     }
 
     /** The pack's shadow map: the split copies, no colour, normal or light arrays (the caller switched them off). */
