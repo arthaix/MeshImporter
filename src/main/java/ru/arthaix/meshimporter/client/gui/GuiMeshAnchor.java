@@ -12,9 +12,7 @@ import org.lwjgl.opengl.GL11;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.audio.PositionedSoundRecord;
 import net.minecraft.client.gui.GuiButton;
-import net.minecraft.client.gui.GuiScreen;
 import net.minecraft.client.gui.GuiTextField;
-import net.minecraft.client.gui.ScaledResolution;
 import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.init.SoundEvents;
 import net.minecraft.item.ItemStack;
@@ -43,7 +41,7 @@ import ru.arthaix.meshimporter.network.Net;
  * The anchor's screen. One anchor can hold several models: the row at the top picks which one is being edited and
  * adds new ones, below it are the model file, its placement, one row per material and build / place / remove.
  */
-public class GuiMeshAnchor extends GuiScreen {
+public class GuiMeshAnchor extends CompactScreen {
 
     private static final int W = 440, H = 284;
     private static final int LIST_Y = 114, LIST_H = 108, ROW_H = 20;
@@ -134,6 +132,16 @@ public class GuiMeshAnchor extends GuiScreen {
         String file = te != null ? te.settings(index).modelPath : "";
         if (file.isEmpty()) return TextFormatting.DARK_GRAY + "empty";
         return file.substring(file.replace((char) 92, (char) 47).lastIndexOf((char) 47) + 1);
+    }
+
+    @Override
+    protected int neededWidth() {
+        return W + 4;
+    }
+
+    @Override
+    protected int neededHeight() {
+        return H + 4;
     }
 
     @Override
@@ -274,7 +282,7 @@ public class GuiMeshAnchor extends GuiScreen {
     // ---- drawing ----
 
     @Override
-    public void drawScreen(int mx, int my, float partialTicks) {
+    protected void drawContent(int mx, int my, float partialTicks) {
         drawDefaultBackground();
         drawRect(left, top, left + W, top + guiH, 0xF0101010);
         drawRect(left, top, left + W, top + 1, 0xFF00B8CC);
@@ -297,7 +305,7 @@ public class GuiMeshAnchor extends GuiScreen {
         drawString(fontRenderer, fontRenderer.trimStringToWidth(status, W - 12), left + 6, py + 9, 0xFFFFFF);
         drawString(fontRenderer, fontRenderer.trimStringToWidth(placedInfo(), W - 12), left + 6, py + 21, 0x9A9A9A);
 
-        super.drawScreen(mx, my, partialTicks);
+        super.drawContent(mx, my, partialTicks);
 
         ItemStack def = BlockRef.toStack(settings.defaultBlock);
         RenderHelper.enableGUIStandardItemLighting();
@@ -316,7 +324,7 @@ public class GuiMeshAnchor extends GuiScreen {
             drawString(fontRenderer, "look", x0 + 266, y0 - 11, 0x808080);
         }
         drawRect(x0, y0, x0 + w, y0 + listH, 0xFF000000);
-        int sf = new ScaledResolution(mc).getScaleFactor();
+        int sf = guiScale;
         GL11.glEnable(GL11.GL_SCISSOR_TEST);
         GL11.glScissor(x0 * sf, mc.displayHeight - (y0 + listH) * sf, w * sf, listH * sf);
         boolean inList = mx >= x0 && mx < x0 + w && my >= y0 && my < y0 + listH;
